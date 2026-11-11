@@ -1,35 +1,36 @@
+import { HotkeyEnum, HotkeyScopeEnum } from '@lobechat/const/hotkeys';
 import { useEffect } from 'react';
 import { useHotkeysContext } from 'react-hotkeys-hook';
 
-import { FOLDER_WIDTH } from '@/const/layoutTokens';
-import { useGlobalStore } from '@/store/global';
-import { systemStatusSelectors } from '@/store/global/selectors';
-import { HotkeyEnum, HotkeyScopeEnum } from '@/types/hotkey';
-
 import { useHotkeyById } from './useHotkeyById';
 
-export const useToggleFilesLeftPanelHotkey = () => {
-  const showFilePanel = useGlobalStore(systemStatusSelectors.showFilePanel);
-  const updateSystemStatus = useGlobalStore((s) => s.updateSystemStatus);
-
-  return useHotkeyById(HotkeyEnum.ToggleLeftPanel, () =>
-    updateSystemStatus({
-      filePanelWidth: showFilePanel ? 0 : FOLDER_WIDTH,
-      showFilePanel: !showFilePanel,
-    }),
+/**
+ * Save document hotkey (Cmd+S / Ctrl+S)
+ * @param onSave - Callback invoked when the save hotkey is triggered
+ */
+export const useSaveDocumentHotkey = (onSave: () => void | Promise<void>) => {
+  return useHotkeyById(
+    HotkeyEnum.SaveDocument,
+    () => {
+      void onSave();
+    },
+    {
+      enableOnContentEditable: true,
+    },
   );
 };
 
-// 注册聚合
-
+/**
+ * Register Files scope and enable it
+ * Use this in components that need Files scope hotkeys
+ */
 export const useRegisterFilesHotkeys = () => {
   const { enableScope, disableScope } = useHotkeysContext();
-
-  // Layout
-  useToggleFilesLeftPanelHotkey();
 
   useEffect(() => {
     enableScope(HotkeyScopeEnum.Files);
     return () => disableScope(HotkeyScopeEnum.Files);
-  }, []);
+  }, [enableScope, disableScope]);
+
+  return null;
 };

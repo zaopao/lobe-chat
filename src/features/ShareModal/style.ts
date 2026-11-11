@@ -1,60 +1,93 @@
-import { createStyles } from 'antd-style';
+import { createStaticStyles, responsive } from '@lobehub/ui';
 
-export const useContainerStyles = createStyles(({ css, token, stylish, cx, responsive }) => ({
-  preview: cx(
-    stylish.noScrollbar,
-    css`
-      overflow: hidden scroll;
+export { styles as containerStyles } from './useContainerStyles';
 
-      width: 100%;
-      max-height: 70dvh;
-      border: 1px solid ${token.colorBorder};
-      border-radius: ${token.borderRadiusLG}px;
-
-      background: ${token.colorBgLayout};
-
-      * {
-        pointer-events: none;
-
-        ::-webkit-scrollbar {
-          width: 0 !important;
-          height: 0 !important;
-        }
-      }
-
-      ${responsive.mobile} {
-        max-height: 40dvh;
-      }
-    `,
-  ),
-}));
-
-export const useStyles = createStyles(({ responsive, token, css }) => ({
-  body: css`
-    ${responsive.mobile} {
-      padding-block-end: 68px;
-    }
-  `,
+export const styles = createStaticStyles(({ css, cssVar }) => ({
   footer: css`
-    ${responsive.mobile} {
-      position: absolute;
-      inset-block-end: 0;
-      inset-inline: 0;
+    flex: none;
+    gap: 8px;
 
-      width: 100%;
-      margin: 0;
-      padding: 16px;
+    min-height: 64px;
+    padding-block: 12px;
+    padding-inline: 20px 16px;
+    border-block-start: 1px solid ${cssVar.colorBorderSecondary};
 
-      background: ${token.colorBgContainer};
+    ${responsive.sm} {
+      flex-direction: column;
+      align-items: stretch;
+      padding-block-end: 16px;
+      padding-inline: 16px;
     }
   `,
-  sidebar: css`
+  footerActions: css`
+    ${responsive.sm} {
+      > * {
+        flex: 1;
+      }
+    }
+  `,
+  meta: css`
+    overflow: hidden;
+    flex: 1;
+
+    font-size: 12px;
+    color: ${cssVar.colorTextDescription};
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    ${responsive.sm} {
+      text-align: center;
+    }
+  `,
+  stage: css`
+    position: relative;
+
+    overflow: auto;
+    flex: 1;
+
+    min-height: 0;
+    padding-block: 24px 0;
+    padding-inline: 32px;
+
+    background: ${cssVar.colorBgLayout};
+
+    ${responsive.sm} {
+      padding-block-start: 16px;
+      padding-inline: 16px;
+    }
+  `,
+  toolbar: css`
+    overflow-x: auto;
     flex: none;
-    width: max(240px, 25%);
-    ${responsive.mobile} {
-      flex: 1;
-      width: unset;
-      margin-inline: -16px;
+    gap: 6px;
+
+    min-height: 48px;
+    padding-inline: 16px;
+    border-block-end: 1px solid ${cssVar.colorBorderSecondary};
+
+    white-space: nowrap;
+
+    ::-webkit-scrollbar {
+      display: none;
+    }
+
+    ${responsive.sm} {
+      flex-wrap: wrap;
+      padding-block: 8px;
+      white-space: normal;
+    }
+  `,
+  toolbarDivider: css`
+    flex: none;
+
+    width: 1px;
+    height: 18px;
+    margin-inline: 6px;
+
+    background: ${cssVar.colorBorder};
+
+    ${responsive.sm} {
+      display: none;
     }
   `,
 }));

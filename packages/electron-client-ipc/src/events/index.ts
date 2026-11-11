@@ -1,45 +1,63 @@
-import { LocalFilesDispatchEvents } from './localFile';
-import { MenuDispatchEvents } from './menu';
-import { RemoteServerBroadcastEvents, RemoteServerDispatchEvents } from './remoteServer';
-import { ShortcutDispatchEvents } from './shortcut';
-import { SystemBroadcastEvents, SystemDispatchEvents } from './system';
-import { TrayDispatchEvents } from './tray';
-import { AutoUpdateBroadcastEvents, AutoUpdateDispatchEvents } from './update';
-import { UploadFilesDispatchEvents } from './upload';
-import { WindowsDispatchEvents } from './windows';
-
-/**
- * renderer -> main dispatch events
- */
-// eslint-disable-next-line @typescript-eslint/no-empty-interface
-export interface ClientDispatchEvents
-  extends WindowsDispatchEvents,
-    SystemDispatchEvents,
-    MenuDispatchEvents,
-    LocalFilesDispatchEvents,
-    AutoUpdateDispatchEvents,
-    ShortcutDispatchEvents,
-    RemoteServerDispatchEvents,
-    UploadFilesDispatchEvents,
-    TrayDispatchEvents {}
-
-export type ClientDispatchEventKey = keyof ClientDispatchEvents;
-
-export type ClientEventReturnType<T extends ClientDispatchEventKey> = ReturnType<
-  ClientDispatchEvents[T]
->;
+import type { ACPBroadcastEvents } from './acp';
+import type { BrowserSidebarBroadcastEvents } from './browserSidebar';
+import type { GatewayConnectionBroadcastEvents } from './gatewayConnection';
+import type { HeterogeneousAgentBroadcastEvents } from './heterogeneousAgent';
+import type { NavigationBroadcastEvents } from './navigation';
+import type { ProtocolBroadcastEvents } from './protocol';
+import type { RemoteServerBroadcastEvents } from './remoteServer';
+import type { ScreenCaptureBroadcastEvents } from './screenCapture';
+import type { SystemBroadcastEvents } from './system';
+import type { TerminalBroadcastEvents } from './terminal';
+import type { TopicPopupBroadcastEvents } from './topicPopup';
+import type { UpdateBroadcastEvents } from './update';
+import type { ZoomBroadcastEvents } from './zoom';
 
 /**
  * main -> render broadcast events
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-interface
+
 export interface MainBroadcastEvents
-  extends AutoUpdateBroadcastEvents,
+  extends
+    ACPBroadcastEvents,
+    UpdateBroadcastEvents,
+    BrowserSidebarBroadcastEvents,
+    GatewayConnectionBroadcastEvents,
+    HeterogeneousAgentBroadcastEvents,
+    NavigationBroadcastEvents,
     RemoteServerBroadcastEvents,
-    SystemBroadcastEvents {}
+    ScreenCaptureBroadcastEvents,
+    SystemBroadcastEvents,
+    TerminalBroadcastEvents,
+    TopicPopupBroadcastEvents,
+    ZoomBroadcastEvents,
+    ProtocolBroadcastEvents {}
 
 export type MainBroadcastEventKey = keyof MainBroadcastEvents;
 
 export type MainBroadcastParams<T extends MainBroadcastEventKey> = Parameters<
   MainBroadcastEvents[T]
 >[0];
+
+export type {
+  GatewayConnectionError,
+  GatewayConnectionErrorCode,
+  GatewayConnectionState,
+  GatewayConnectionStatus,
+  GatewayConnectResult,
+  GatewayEndpointInfo,
+  GatewayEndpointSource,
+} from './gatewayConnection';
+export type {
+  DetectAppsResult,
+  DetectedApp,
+  OpenInAppId,
+  OpenInAppParams,
+  OpenInAppResult,
+} from './openInApp';
+export type {
+  AuthorizationPhase,
+  AuthorizationProgress,
+  MarketAuthorizationParams,
+} from './remoteServer';
+export type { OverlayDispatchMessagePayload } from './screenCapture';
+export type { OpenSettingsWindowOptions } from './windows';

@@ -1,18 +1,17 @@
+import { RequestTrigger } from '@lobechat/types';
 import { act, renderHook } from '@testing-library/react';
-import { Mock, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { type Mock } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { chainLangDetect } from '@/chains/langDetect';
-import { chainTranslate } from '@/chains/translate';
 import { chatService } from '@/services/chat';
 import { messageService } from '@/services/message';
 import { messageMapKey } from '@/store/chat/utils/messageMapKey';
 
 import { useChatStore } from '../../store';
 
-// Mock messageService 和 chatService
+// Mock messageService and chatService
 vi.mock('@/services/message', () => ({
   messageService: {
-    updateMessageTTS: vi.fn(),
     updateMessageTranslate: vi.fn(),
     updateMessage: vi.fn(),
   },
@@ -24,27 +23,32 @@ vi.mock('@/services/chat', () => ({
   },
 }));
 
-vi.mock('@/chains/langDetect', () => ({
-  chainLangDetect: vi.fn(),
+// Message writes go through the transcript replica, which reads the cache scope.
+vi.mock('@/libs/swr/useCacheScope', () => ({
+  getCacheScope: () => 'test-scope',
+  isScopeTrusted: () => false,
+  useCacheScope: () => 'test-scope',
 }));
 
-vi.mock('@/chains/translate', () => ({
-  chainTranslate: vi.fn(),
+vi.mock('@/store/user', () => ({
+  useUserStore: {
+    getState: vi.fn(() => ({})),
+  },
 }));
 
-// Mock supportLocales
-vi.mock('@/locales/options', () => ({
-  supportLocales: ['en-US', 'zh-CN'],
+vi.mock('@/store/user/selectors', () => ({
+  systemAgentSelectors: {
+    translation: vi.fn(() => ({
+      customPrompt: 'Translate literally',
+      enabled: true,
+      model: 'qwen3:1.7b',
+      provider: 'ollama',
+    })),
+  },
 }));
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useChatStore.setState(
-    {
-      // ... 初始状态
-    },
-    false,
-  );
 });
 
 afterEach(() => {
@@ -53,48 +57,99 @@ afterEach(() => {
 
 describe('ChatEnhanceAction', () => {
   describe('translateMessage', () => {
-    it('should translate a message to the target language and refresh messages', async () => {
-      const { result } = renderHook(() => useChatStore());
+    it('should translate a message to the target language', async () => {
       const messageId = 'message-id';
       const targetLang = 'zh-CN';
       const messageContent = 'Hello World';
       const detectedLang = 'en-US';
+      const translatedText = '你好世界';
 
+      // Setup initial state
       act(() => {
         useChatStore.setState({
-          activeId: 'session',
-          messagesMap: {
-            [messageMapKey('session')]: [
+          activeAgentId: 'session',
+          dbMessagesMap: {
+            [messageMapKey({ agentId: 'session' })]: [
               {
                 id: messageId,
                 content: messageContent,
                 createdAt: Date.now(),
                 updatedAt: Date.now(),
-                role: 'user',
-                sessionId: 'test',
-                topicId: 'test',
-                meta: {},
+                role: 'assistant',
+                sessionId: 'session',
               },
             ],
           },
         });
       });
 
-      (chatService.fetchPresetTaskResult as Mock).mockImplementation(({ params }) => {
-        if (params === chainLangDetect(messageContent)) {
-          return Promise.resolve(detectedLang);
-        }
-        if (params === chainTranslate(messageContent, targetLang)) {
-          return Promise.resolve('Hola Mundo');
-        }
-        return Promise.resolve(undefined);
+      // First call for language detection
+      (chatService.fetchPresetTaskResult as Mock).mockImplementationOnce(async ({ onFinish }) => {
+        if (onFinish) await onFinish(detectedLang);
       });
+
+      // Second call for translation
+      (chatService.fetchPresetTaskResult as Mock).mockImplementationOnce(async ({ onFinish }) => {
+        if (onFinish) await onFinish(translatedText);
+      });
+
+      const { result } = renderHook(() => useChatStore());
 
       await act(async () => {
         await result.current.translateMessage(messageId, targetLang);
       });
 
       expect(messageService.updateMessageTranslate).toHaveBeenCalled();
+      expect(chatService.fetchPresetTaskResult).toHaveBeenCalledTimes(2);
+      for (const [params] of (chatService.fetchPresetTaskResult as Mock).mock.calls) {
+        expect(params.trigger).toBe(RequestTrigger.Translate);
+        // The system agent's own settings are not model parameters: the
+        // request carries the model only, whatever provider it is relayed to.
+        expect(params.params).toMatchObject({ model: 'qwen3:1.7b', provider: 'ollama' });
+        expect(params.params).not.toHaveProperty('enabled');
+        expect(params.params).not.toHaveProperty('customPrompt');
+      }
+    });
+    it('keeps the detected language when a small model adds text after the locale', async () => {
+      const messageId = 'message-id';
+
+      act(() => {
+        useChatStore.setState({
+          activeAgentId: 'session',
+          dbMessagesMap: {
+            [messageMapKey({ agentId: 'session' })]: [
+              {
+                id: messageId,
+                content: '杭州西湖是中国著名的风景名胜区。',
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+                role: 'assistant',
+                sessionId: 'session',
+              },
+            ],
+          },
+        });
+      });
+
+      // qwen3:1.7b answers the detection prompt with the locale, then echoes the input
+      (chatService.fetchPresetTaskResult as Mock).mockImplementationOnce(async ({ onFinish }) => {
+        await onFinish?.('zh-CN  \n{杭州西湖是中国著名的风景名胜区。}');
+      });
+      (chatService.fetchPresetTaskResult as Mock).mockImplementationOnce(async ({ onFinish }) => {
+        await onFinish?.('West Lake in Hangzhou is a famous scenic area in China.');
+      });
+
+      const { result } = renderHook(() => useChatStore());
+
+      await act(async () => {
+        await result.current.translateMessage(messageId, 'en-US');
+      });
+
+      expect(messageService.updateMessageTranslate).toHaveBeenLastCalledWith(messageId, {
+        content: 'West Lake in Hangzhou is a famous scenic area in China.',
+        from: 'zh-CN',
+        to: 'en-US',
+      });
     });
   });
 

@@ -1,20 +1,25 @@
-import { ElectronAppState, ThemeMode } from '../types';
-
-export interface SystemDispatchEvents {
-  checkSystemAccessibility: () => boolean | undefined;
-  closeWindow: () => void;
-  getDesktopAppState: () => ElectronAppState;
-  maximizeWindow: () => void;
-  minimizeWindow: () => void;
-  openExternalLink: (url: string) => void;
-  /**
-   * 更新应用语言设置
-   * @param locale 语言设置
-   */
-  updateLocale: (locale: string) => { success: boolean };
-  updateThemeMode: (themeMode: ThemeMode) => void;
-}
+import type {
+  ElectronAppState,
+  GuidedPermission,
+  PermissionGuideStatus,
+  ThemeAppearance,
+  ThemeMode,
+} from '../types';
 
 export interface SystemBroadcastEvents {
+  /**
+   * Fired when a piece of the app state changes after boot (e.g. the user
+   * switches the Windows shell in settings). Carries only the changed fields;
+   * the renderer merges them into its app-state copy and the agent context.
+   */
+  appStateUpdated: (data: Partial<ElectronAppState>) => void;
+  localeChanged: (data: { locale: string }) => void;
+  permissionGuideChanged: (data: {
+    permission: GuidedPermission;
+    status: PermissionGuideStatus;
+  }) => void;
+  systemThemeChanged: (data: { themeMode: ThemeAppearance }) => void;
   themeChanged: (data: { themeMode: ThemeMode }) => void;
+  windowFocused: () => void;
+  windowFullscreenChanged: (data: { isFullScreen: boolean }) => void;
 }

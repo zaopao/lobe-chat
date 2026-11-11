@@ -4,13 +4,23 @@ import type { App } from '@/core/App';
 
 import ShortcutController from '../ShortcutCtr';
 
-// 模拟 App 及其依赖项
-const mockGetShortcutsConfig = vi.fn().mockReturnValue({ 
+const { ipcMainHandleMock } = vi.hoisted(() => ({
+  ipcMainHandleMock: vi.fn(),
+}));
+
+vi.mock('electron', () => ({
+  ipcMain: {
+    handle: ipcMainHandleMock,
+  },
+}));
+
+// Mock App and its dependencies
+const mockGetShortcutsConfig = vi.fn().mockReturnValue({
   toggleMainWindow: 'CommandOrControl+Shift+L',
-  openSettings: 'CommandOrControl+,'
+  openSettings: 'CommandOrControl+,',
 });
-const mockUpdateShortcutConfig = vi.fn().mockImplementation((id, accelerator) => {
-  // 简单模拟更新成功
+const mockUpdateShortcutConfig = vi.fn().mockImplementation((_id, _accelerator) => {
+  // Simply mock a successful update
   return true;
 });
 
@@ -26,17 +36,18 @@ describe('ShortcutController', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ipcMainHandleMock.mockClear();
     shortcutController = new ShortcutController(mockApp);
   });
 
   describe('getShortcutsConfig', () => {
     it('should return shortcuts config from shortcutManager', () => {
       const result = shortcutController.getShortcutsConfig();
-      
+
       expect(mockGetShortcutsConfig).toHaveBeenCalled();
       expect(result).toEqual({
         toggleMainWindow: 'CommandOrControl+Shift+L',
-        openSettings: 'CommandOrControl+,'
+        openSettings: 'CommandOrControl+,',
       });
     });
   });
@@ -45,20 +56,23 @@ describe('ShortcutController', () => {
     it('should call shortcutManager.updateShortcutConfig with correct parameters', () => {
       const id = 'toggleMainWindow';
       const accelerator = 'CommandOrControl+Alt+L';
-      
-      const result = shortcutController.updateShortcutConfig(id, accelerator);
-      
+
+      const result = shortcutController.updateShortcutConfig({ id, accelerator });
+
       expect(mockUpdateShortcutConfig).toHaveBeenCalledWith(id, accelerator);
       expect(result).toBe(true);
     });
 
     it('should return the result from shortcutManager.updateShortcutConfig', () => {
-      // 模拟更新失败的情况
+      // Mock an update failure scenario
       mockUpdateShortcutConfig.mockReturnValueOnce(false);
-      
-      const result = shortcutController.updateShortcutConfig('invalidKey', 'invalid+combo');
-      
+
+      const result = shortcutController.updateShortcutConfig({
+        id: 'invalidKey',
+        accelerator: 'invalid+combo',
+      });
+
       expect(result).toBe(false);
     });
   });
-}); 
+});

@@ -4,7 +4,7 @@ import { LucideToyBrick } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import Avatar from '@/features/PluginStore/PluginItem/PluginAvatar';
+import Avatar from '@/components/Plugins/PluginAvatar';
 import { pluginHelpers, useToolStore } from '@/store/tool';
 import { toolSelectors } from '@/store/tool/selectors';
 
@@ -18,7 +18,7 @@ const PluginAvatar = memo<PluginAvatarProps>(({ identifier, size = 32 }) => {
 
   const pluginMeta = useToolStore(toolSelectors.getMetaById(identifier), isEqual);
   const pluginAvatar = pluginHelpers.getPluginAvatar(pluginMeta);
-  const pluginTitle = pluginHelpers.getPluginTitle(pluginMeta) ?? t('unknownPlugin');
+  const pluginTitle = pluginHelpers.getPluginTitle(pluginMeta) ?? identifier;
 
   return pluginAvatar ? (
     <Avatar alt={pluginTitle} avatar={pluginAvatar} size={size} />

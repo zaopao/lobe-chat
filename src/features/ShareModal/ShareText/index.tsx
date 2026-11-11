@@ -1,23 +1,18 @@
-import { Button, Form, type FormItemProps, copyToClipboard } from '@lobehub/ui';
-import { App, Switch } from 'antd';
-import isEqual from 'fast-deep-equal';
-import { CopyIcon } from 'lucide-react';
+import { exportFile } from '@lobechat/utils/client';
+import { formatSize } from '@lobechat/utils/format';
+import { Button, copyToClipboard, toast } from '@lobehub/ui';
+import { CopyIcon, DownloadIcon } from 'lucide-react';
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Flexbox } from 'react-layout-kit';
 
-import { FORM_STYLE } from '@/const/layoutTokens';
-import { useIsMobile } from '@/hooks/useIsMobile';
-import { useAgentStore } from '@/store/agent';
-import { agentSelectors } from '@/store/agent/selectors';
-import { useChatStore } from '@/store/chat';
-import { chatSelectors, topicSelectors } from '@/store/chat/selectors';
-import { exportFile } from '@/utils/client/exportFile';
-
-import { useStyles } from '../style';
+import ExportLayout from '../components/ExportLayout';
+import { flattenExportMessages } from '../flattenExportMessages';
+import { useShareData } from '../ShareDataProvider';
+import { useExportMessages } from '../useExportMessages';
 import Preview from './Preview';
 import { generateMarkdown } from './template';
-import { FieldType } from './type';
+import TextOptions from './TextOptions';
+import { type FieldType } from './type';
 
 const DEFAULT_FIELD_VALUE: FieldType = {
   includeTool: true,
@@ -29,104 +24,60 @@ const DEFAULT_FIELD_VALUE: FieldType = {
 const ShareText = memo(() => {
   const [fieldValue, setFieldValue] = useState(DEFAULT_FIELD_VALUE);
   const { t } = useTranslation(['chat', 'common']);
-  const { styles } = useStyles();
-  const { message } = App.useApp();
-  const settings: FormItemProps[] = [
-    {
-      children: <Switch />,
-      label: t('shareModal.withSystemRole'),
-      layout: 'horizontal',
-      minWidth: undefined,
-      name: 'withSystemRole',
-      valuePropName: 'checked',
-    },
-    {
-      children: <Switch />,
-      label: t('shareModal.withRole'),
-      layout: 'horizontal',
-      minWidth: undefined,
-      name: 'withRole',
-      valuePropName: 'checked',
-    },
-    {
-      children: <Switch />,
-      label: t('shareModal.includeUser'),
-      layout: 'horizontal',
-      minWidth: undefined,
-      name: 'includeUser',
-      valuePropName: 'checked',
-    },
-    {
-      children: <Switch />,
-      label: t('shareModal.includeTool'),
-      layout: 'horizontal',
-      minWidth: undefined,
-      name: 'includeTool',
-      valuePropName: 'checked',
-    },
-  ];
 
-  const [systemRole] = useAgentStore((s) => [agentSelectors.currentAgentSystemRole(s)]);
-  const messages = useChatStore(chatSelectors.activeBaseChats, isEqual);
-  const topic = useChatStore(topicSelectors.currentActiveTopic, isEqual);
-
-  const title = topic?.title || t('shareModal.exportTitle');
+  const { dbMessages, displayMessages, systemRole, title } = useShareData();
+  // Assistant turns are folded into groups in the display list — unfold them,
+  // or only the user's messages are exported. Markdown serializes each tool's
+  // `content` too, so the same omitted rows would export as empty code blocks
+  // — see `useExportMessages`.
+  const {
+    isHydrating,
+    isIncomplete,
+    messages: exportMessages,
+  } = useExportMessages(flattenExportMessages(displayMessages, dbMessages));
   const content = generateMarkdown({
     ...fieldValue,
-    messages,
-    systemRole,
+    messages: exportMessages,
+    systemRole: systemRole ?? '',
     title,
   }).replaceAll('\n\n\n', '\n');
 
-  const isMobile = useIsMobile();
-
-  const button = (
-    <>
-      <Button
-        block
-        icon={CopyIcon}
-        onClick={async () => {
-          await copyToClipboard(content);
-          message.success(t('copySuccess', { defaultValue: 'Copy Success', ns: 'common' }));
-        }}
-        size={isMobile ? undefined : 'large'}
-        type={'primary'}
-      >
-        {t('copy', { ns: 'common' })}
-      </Button>
-      <Button
-        block
-        onClick={() => {
-          exportFile(content, `${title}.md`);
-        }}
-        size={isMobile ? undefined : 'large'}
-      >
-        {t('shareModal.downloadFile')}
-      </Button>
-    </>
-  );
+  const disabled = isHydrating || isIncomplete;
 
   return (
-    <>
-      <Flexbox className={styles.body} gap={16} horizontal={!isMobile}>
-        <Preview content={content} />
-        <Flexbox className={styles.sidebar} gap={12}>
-          <Form
-            initialValues={DEFAULT_FIELD_VALUE}
-            items={settings}
-            itemsType={'flat'}
-            onValuesChange={(_, v) => setFieldValue(v)}
-            {...FORM_STYLE}
-          />
-          {!isMobile && button}
-        </Flexbox>
-      </Flexbox>
-      {isMobile && (
-        <Flexbox className={styles.footer} gap={8} horizontal>
-          {button}
-        </Flexbox>
-      )}
-    </>
+    <ExportLayout
+      toolbar={<TextOptions value={fieldValue} onChange={setFieldValue} />}
+      actions={
+        <>
+          <Button
+            disabled={disabled}
+            icon={CopyIcon}
+            loading={isHydrating}
+            onClick={async () => {
+              await copyToClipboard(content);
+              toast.success(t('copySuccess', { ns: 'common' }));
+            }}
+          >
+            {t('shareModal.actions.copyText')}
+          </Button>
+          <Button
+            disabled={disabled}
+            icon={DownloadIcon}
+            type={'primary'}
+            onClick={() => exportFile(content, `${title}.md`)}
+          >
+            {t('shareModal.actions.download')}
+          </Button>
+        </>
+      }
+      meta={[
+        t('shareModal.meta.messages', { count: displayMessages.length }),
+        formatSize(new Blob([content]).size),
+        '.md',
+      ].join(' · ')}
+    >
+      <Preview content={content} />
+    </ExportLayout>
   );
 });
 

@@ -1,5 +1,4 @@
-import { Icon, Tag } from '@lobehub/ui';
-import { Divider } from 'antd';
+import { Divider, Icon, Tag } from '@lobehub/ui';
 import { Timer } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -15,9 +14,7 @@ const HistoryDivider = memo<HistoryDividerProps>(({ enable }) => {
   return (
     <div style={{ padding: '0 20px' }}>
       <Divider style={{ margin: 0, padding: '20px 0' }}>
-        <Tag icon={<Icon icon={Timer} />}>
-          {t('historyRange', { defaultValue: 'History Message' })}
-        </Tag>
+        <Tag icon={<Icon icon={Timer} />}>{t('historyRange')}</Tag>
       </Divider>
     </div>
   );

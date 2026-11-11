@@ -1,10 +1,12 @@
-import { PortalImpl } from '../type';
+import { type PortalImpl } from '../type';
 import Body from './Body';
 import Header from './Header';
-import { useEnable } from './useEnable';
+import Title from './Title';
+import { useFilePreviewMoreMenu } from './useMoreMenu';
 
 export const FilePreview: PortalImpl = {
   Body,
-  Title: Header,
-  useEnable,
+  Header,
+  Title,
+  useMoreMenu: useFilePreviewMoreMenu,
 };

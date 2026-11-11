@@ -1,110 +1,431 @@
+import { createHash } from 'node:crypto';
+import { constants, createReadStream } from 'node:fs';
+import { access, readFile, realpath, stat } from 'node:fs/promises';
+import path from 'node:path';
+
+import type {
+  CopyAssetForPublishParams,
+  CopyAssetForPublishResult,
+  ExternalAssetForPublishParams,
+  ExternalAssetForPublishResult,
+  // The DEVICE's index shape, not the renderer's. The renderer union also
+  // covers the cloud sandbox as a source, which nothing on a machine produces,
+  // so declaring that wider type here would over-claim what this returns — and
+  // the gateway handler bag, typed by what a device sends, would reject it.
+  ProjectFileIndexResult as DeviceProjectFileIndexResult,
+  SkillDirectoryDeps,
+} from '@lobechat/device-control';
 import {
-  ListLocalFileParams,
-  LocalMoveFilesResultItem,
-  LocalReadFileParams,
-  LocalReadFileResult,
-  LocalReadFilesParams,
-  LocalSearchFilesParams,
-  MoveLocalFilesParams,
-  OpenLocalFileParams,
-  OpenLocalFolderParams,
-  RenameLocalFileResult,
-  WriteLocalFileParams,
+  outsideWorkspacePreviewFailure,
+  toLocalFilePreviewFailure,
+} from '@lobechat/device-control/file-preview';
+import {
+  defaultGetProjectFileIndex,
+  defaultListProjectDirectory,
+  defaultSearchProjectFiles,
+} from '@lobechat/device-control/project-file-index';
+import {
+  type AuditSafePathsParams,
+  type AuditSafePathsResult,
+  type CopyLocalFilesParams,
+  type CreateLocalDirectoryParams,
+  type CreateLocalEntryResult,
+  type CreateLocalFileParams,
+  type EditLocalFileParams,
+  type EditLocalFileResult,
+  type GlobFilesParams,
+  type GlobFilesResult,
+  type GrepContentParams,
+  type GrepContentResult,
+  type HashLocalFileParams,
+  type ListLocalFileParams,
+  type LocalCopyFilesResultItem,
+  type LocalFilePreviewResult,
+  type LocalFilePreviewUrlParams,
+  type LocalFilePreviewUrlResult,
+  type LocalFileStats,
+  type LocalFileStatsParams,
+  type LocalMoveFilesResultItem,
+  type LocalReadFileParams,
+  type LocalReadFileResult,
+  type LocalReadFilesParams,
+  type LocalSearchFilesParams,
+  type MoveLocalFilesParams,
+  type OpenLocalFileParams,
+  type OpenLocalFolderParams,
+  type PickFileParams,
+  type PickFileResult,
+  type PrepareSkillDirectoryParams,
+  type PrepareSkillDirectoryResult,
+  type ProjectDirectoryListParams,
+  type ProjectDirectoryListResult,
+  type ProjectFileIndexParams,
+  type ProjectFileSearchParams,
+  type ProjectFileSearchResult,
+  type RenameLocalFileResult,
+  type ResolveSkillResourcePathParams,
+  type ResolveSkillResourcePathResult,
+  type ShowOpenDialogParams,
+  type ShowOpenDialogResult,
+  type ShowSaveDialogParams,
+  type ShowSaveDialogResult,
+  type TrashLocalFilesParams,
+  type TrashLocalFilesResult,
+  type TrashLocalFilesResultItem,
+  type WriteLocalFileParams,
 } from '@lobechat/electron-client-ipc';
-import { SYSTEM_FILES_TO_IGNORE, loadFile } from '@lobechat/file-loaders';
-import { shell } from 'electron';
-import * as fs from 'node:fs';
-import { rename as renamePromise } from 'node:fs/promises';
-import * as path from 'node:path';
-import { promisify } from 'node:util';
+import {
+  copyLocalFiles,
+  createLocalDirectory,
+  createLocalFile,
+  editLocalFile,
+  expandTilde,
+  getLocalImageMimeType,
+  listLocalFiles,
+  moveLocalFiles,
+  readLocalFile,
+  readLocalImageFile,
+  renameLocalFile,
+  writeLocalFile,
+} from '@lobechat/local-file-shell/file';
+import type { FileResult, SearchOptions } from '@lobechat/local-file-shell/types';
+import { isUtf16Buffer, sniffBinaryBuffer } from '@lobechat/utils/isBinaryContent';
+import { resolveMimeType } from '@lobechat/utils/mimeType';
+import { dialog, shell } from 'electron';
 
+import ContentSearchService from '@/services/contentSearchSrv';
 import FileSearchService from '@/services/fileSearchSrv';
-import { FileResult, SearchOptions } from '@/types/fileSearch';
-import { makeSureDirExist } from '@/utils/file-system';
+import RemoteFileUploadService, {
+  describeUploadFailure,
+  type UploadFailure,
+} from '@/services/remoteFileUploadSrv';
 import { createLogger } from '@/utils/logger';
+import { netFetch } from '@/utils/net-fetch';
+import { shrinkImageForUpload } from '@/utils/shrinkImageForUpload';
 
-import { ControllerModule, ipcClientEvent } from './index';
+import { ControllerModule, IpcMethod } from './index';
 
-// 创建日志记录器
+// Create logger
 const logger = createLogger('controllers:LocalFileCtr');
 
-const statPromise = promisify(fs.stat);
-const readdirPromise = promisify(fs.readdir);
-const renamePromiseFs = promisify(fs.rename);
-const accessPromise = promisify(fs.access);
-const writeFilePromise = promisify(fs.writeFile);
+const formatUploadFailure = ({ kind, reason }: UploadFailure): string => {
+  switch (kind) {
+    case 'storage_quota': {
+      return `the user's LobeHub file storage is full (${reason}), so the model cannot view this image. Retrying will not help; the user needs to free up space in their file library or upgrade their plan`;
+    }
+    case 'network': {
+      return `network error while uploading (${reason}), already retried, so the model cannot view this image. It may work if the file is read again later`;
+    }
+    case 'auth': {
+      return `the desktop app is not signed in to LobeHub (${reason}), so the model cannot view this image`;
+    }
+    default: {
+      return `${reason}; the model cannot view this image`;
+    }
+  }
+};
+
+const SAFE_PATH_PREFIXES = ['/tmp', '/var/tmp'] as const;
+
+const TEXT_PREVIEW_MIME_TYPES = new Set([
+  'application/graphql',
+  'application/javascript',
+  'application/json',
+  'application/markdown',
+  'application/toml',
+  'application/xml',
+  'application/yaml',
+  'text/markdown',
+  'text/mdx',
+  'text/x-markdown',
+]);
+
+const normalizeAbsolutePath = (inputPath: string): string =>
+  path.normalize(path.isAbsolute(inputPath) ? inputPath : `/${inputPath}`);
+
+const resolvePathWithScope = (inputPath: string, scope: string): string =>
+  path.isAbsolute(inputPath) ? inputPath : path.join(scope, inputPath);
+
+const isWithinSafePathPrefixes = (targetPath: string, prefixes: readonly string[]): boolean =>
+  prefixes.some((prefix) => targetPath === prefix || targetPath.startsWith(`${prefix}${path.sep}`));
+
+/** Bytes sampled to decide whether a file is text before counting its lines. */
+const LOCAL_FILE_SNIFF_BYTES = 8 * 1024;
+
+/** Files above this size skip line counting so inserting a reference stays fast. */
+const LOCAL_FILE_LINE_COUNT_MAX_BYTES = 256 * 1024 * 1024;
+
+const resolveNearestExistingRealPath = async (targetPath: string): Promise<string | undefined> => {
+  let currentPath = targetPath;
+
+  while (true) {
+    try {
+      await access(currentPath, constants.F_OK);
+      return normalizeAbsolutePath(await realpath(currentPath));
+    } catch {
+      const parentPath = path.dirname(currentPath);
+      if (parentPath === currentPath) return undefined;
+      currentPath = parentPath;
+    }
+  }
+};
+
+const normalizeContentType = (contentType: string): string =>
+  contentType.split(';')[0].trim().toLowerCase();
+
+const isTextPreviewMimeType = (mimeType: string): boolean =>
+  mimeType.startsWith('text/') || TEXT_PREVIEW_MIME_TYPES.has(mimeType);
+
+/** Binary documents the in-app portal can preview (or offer to download). */
+const DOCUMENT_PREVIEW_MIME_TYPES = new Set([
+  'application/msword',
+  'application/pdf',
+  'application/vnd.ms-excel',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+]);
+
+/**
+ * Documents above this raw size fall back to the content-less `binary` / `pdf`
+ * variants: base64 inflates the payload ~4/3 and it must fit in a single
+ * IPC / Gateway RPC response.
+ */
+const MAX_DOCUMENT_PREVIEW_BYTES = 20 * 1024 * 1024;
+
+const serializePreviewFile = ({
+  buffer,
+  contentType,
+  oversized,
+}: {
+  buffer: Buffer;
+  contentType: string;
+  oversized?: boolean;
+}): NonNullable<LocalFilePreviewResult['preview']> => {
+  const normalizedContentType = normalizeContentType(contentType);
+
+  // The protocol manager short-circuited the read (oversized document):
+  // `buffer` is empty by construction, so go straight to the content-less
+  // fallback instead of serializing the empty buffer as a real document.
+  if (oversized) {
+    return normalizedContentType === 'application/pdf'
+      ? { contentType: normalizedContentType, type: 'pdf' }
+      : { contentType: normalizedContentType, type: 'binary' };
+  }
+
+  if (normalizedContentType.startsWith('image/')) {
+    return {
+      base64: buffer.toString('base64'),
+      contentType: normalizedContentType,
+      type: 'image',
+    };
+  }
+
+  if (isTextPreviewMimeType(normalizedContentType)) {
+    return {
+      content: buffer.toString('utf8'),
+      contentType: normalizedContentType,
+      type: 'text',
+    };
+  }
+
+  if (
+    DOCUMENT_PREVIEW_MIME_TYPES.has(normalizedContentType) &&
+    buffer.byteLength <= MAX_DOCUMENT_PREVIEW_BYTES
+  ) {
+    return {
+      base64: buffer.toString('base64'),
+      contentType: normalizedContentType,
+      type: 'document',
+    };
+  }
+
+  if (normalizedContentType === 'application/pdf') {
+    return { contentType: normalizedContentType, type: 'pdf' };
+  }
+
+  if (normalizedContentType.startsWith('video/')) {
+    return { contentType: normalizedContentType, type: 'video' };
+  }
+
+  return { contentType: normalizedContentType, type: 'binary' };
+};
+
+const resolveSafePathRealPrefixes = async (): Promise<string[]> => {
+  const prefixes = new Set<string>(SAFE_PATH_PREFIXES);
+
+  for (const safePrefix of SAFE_PATH_PREFIXES) {
+    try {
+      prefixes.add(normalizeAbsolutePath(await realpath(safePrefix)));
+    } catch {
+      // Keep the lexical prefix if the platform does not expose this directory.
+    }
+  }
+
+  return [...prefixes];
+};
+
+const areAllPathsSafeOnDisk = async (
+  paths: string[],
+  resolveAgainstScope: string,
+): Promise<boolean> => {
+  if (paths.length === 0) return false;
+
+  const safeRealPrefixes = await resolveSafePathRealPrefixes();
+
+  for (const currentPath of paths) {
+    const normalizedPath = normalizeAbsolutePath(
+      resolvePathWithScope(currentPath, resolveAgainstScope),
+    );
+
+    if (!isWithinSafePathPrefixes(normalizedPath, SAFE_PATH_PREFIXES)) {
+      return false;
+    }
+
+    const realPath = await resolveNearestExistingRealPath(normalizedPath);
+    if (!realPath || !isWithinSafePathPrefixes(realPath, safeRealPrefixes)) {
+      return false;
+    }
+  }
+
+  return true;
+};
 
 export default class LocalFileCtr extends ControllerModule {
+  static override readonly groupName = 'localSystem';
   private get searchService() {
     return this.app.getService(FileSearchService);
   }
 
-  /**
-   * Handle IPC event for local file search
-   */
-  @ipcClientEvent('searchLocalFiles')
-  async handleLocalFilesSearch(params: LocalSearchFilesParams): Promise<FileResult[]> {
-    logger.debug('Received file search request:', { keywords: params.keywords });
-
-    const options: Omit<SearchOptions, 'keywords'> = {
-      limit: 30,
-    };
-
-    try {
-      const results = await this.searchService.search(params.keywords, options);
-      logger.debug('File search completed', { count: results.length });
-      return results;
-    } catch (error) {
-      logger.error('File search failed:', error);
-      return [];
-    }
+  private get contentSearchService() {
+    return this.app.getService(ContentSearchService);
   }
 
-  @ipcClientEvent('openLocalFile')
+  // ==================== File Operation ====================
+
+  @IpcMethod()
   async handleOpenLocalFile({ path: filePath }: OpenLocalFileParams): Promise<{
     error?: string;
     success: boolean;
   }> {
-    logger.debug('Attempting to open file:', { filePath });
+    const resolvedPath = expandTilde(filePath) ?? filePath;
+    logger.debug('Attempting to open file:', { filePath: resolvedPath });
 
     try {
-      await shell.openPath(filePath);
-      logger.debug('File opened successfully:', { filePath });
+      await shell.openPath(resolvedPath);
+      logger.debug('File opened successfully:', { filePath: resolvedPath });
       return { success: true };
     } catch (error) {
-      logger.error(`Failed to open file ${filePath}:`, error);
+      logger.error(`Failed to open file ${resolvedPath}:`, error);
       return { error: (error as Error).message, success: false };
     }
   }
 
-  @ipcClientEvent('openLocalFolder')
+  @IpcMethod()
   async handleOpenLocalFolder({ path: targetPath, isDirectory }: OpenLocalFolderParams): Promise<{
     error?: string;
     success: boolean;
   }> {
-    const folderPath = isDirectory ? targetPath : path.dirname(targetPath);
-    logger.debug('Attempting to open folder:', { folderPath, isDirectory, targetPath });
+    const resolvedTarget = expandTilde(targetPath) ?? targetPath;
+    logger.debug('Attempting to open folder:', { isDirectory, targetPath: resolvedTarget });
 
     try {
-      await shell.openPath(folderPath);
-      logger.debug('Folder opened successfully:', { folderPath });
+      if (isDirectory) {
+        await shell.openPath(resolvedTarget);
+      } else {
+        shell.showItemInFolder(resolvedTarget);
+      }
+      logger.debug('Folder opened successfully:', { targetPath: resolvedTarget });
       return { success: true };
     } catch (error) {
-      logger.error(`Failed to open folder ${folderPath}:`, error);
+      logger.error(`Failed to open folder for ${resolvedTarget}:`, error);
       return { error: (error as Error).message, success: false };
     }
   }
 
-  @ipcClientEvent('readLocalFiles')
-  async readFiles({ paths }: LocalReadFilesParams): Promise<LocalReadFileResult[]> {
+  @IpcMethod()
+  async handleShowOpenDialog({
+    filters,
+    multiple,
+    title,
+  }: ShowOpenDialogParams): Promise<ShowOpenDialogResult> {
+    logger.debug('Showing open dialog:', { filters, multiple, title });
+
+    const result = await dialog.showOpenDialog({
+      filters,
+      properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
+      title,
+    });
+
+    logger.debug('Open dialog result:', { canceled: result.canceled, filePaths: result.filePaths });
+
+    return {
+      canceled: result.canceled,
+      filePaths: result.filePaths,
+    };
+  }
+
+  @IpcMethod()
+  async handlePickFile({ filters, title }: PickFileParams): Promise<PickFileResult> {
+    logger.debug('Picking file:', { filters, title });
+
+    const result = await dialog.showOpenDialog({
+      filters,
+      properties: ['openFile'],
+      title,
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true };
+    }
+
+    const filePath = result.filePaths[0];
+    const data = await readFile(filePath);
+    const name = path.basename(filePath);
+    const mimeType = await resolveMimeType(name, data);
+
+    return {
+      canceled: false,
+      file: {
+        data: new Uint8Array(data),
+        mimeType,
+        name,
+      },
+    };
+  }
+
+  @IpcMethod()
+  async handleShowSaveDialog({
+    defaultPath,
+    filters,
+    title,
+  }: ShowSaveDialogParams): Promise<ShowSaveDialogResult> {
+    logger.debug('Showing save dialog:', { defaultPath, filters, title });
+
+    const result = await dialog.showSaveDialog({
+      defaultPath,
+      filters,
+      title,
+    });
+
+    logger.debug('Save dialog result:', { canceled: result.canceled, filePath: result.filePath });
+
+    return {
+      canceled: result.canceled,
+      filePath: result.filePath,
+    };
+  }
+
+  @IpcMethod()
+  async readFiles({ paths, cwd }: LocalReadFilesParams): Promise<LocalReadFileResult[]> {
     logger.debug('Starting batch file reading:', { count: paths.length });
 
     const results: LocalReadFileResult[] = [];
 
     for (const filePath of paths) {
-      // 初始化结果对象
       logger.debug('Reading single file:', { filePath });
-      const result = await this.readFile({ path: filePath });
+      const result = await readLocalFile({ cwd, path: filePath });
       results.push(result);
     }
 
@@ -112,249 +433,117 @@ export default class LocalFileCtr extends ControllerModule {
     return results;
   }
 
-  @ipcClientEvent('readLocalFile')
-  async readFile({ path: filePath, loc }: LocalReadFileParams): Promise<LocalReadFileResult> {
-    const effectiveLoc = loc ?? [0, 200];
-    logger.debug('Starting to read file:', { filePath, loc: effectiveLoc });
-
-    try {
-      const fileDocument = await loadFile(filePath);
-
-      const [startLine, endLine] = effectiveLoc;
-      const lines = fileDocument.content.split('\n');
-      const totalLineCount = lines.length;
-      const totalCharCount = fileDocument.content.length;
-
-      // Adjust slice indices to be 0-based and inclusive/exclusive
-      const selectedLines = lines.slice(startLine, endLine);
-      const content = selectedLines.join('\n');
-      const charCount = content.length;
-      const lineCount = selectedLines.length;
-
-      logger.debug('File read successfully:', {
-        filePath,
-        selectedLineCount: lineCount,
-        totalCharCount,
-        totalLineCount,
-      });
-
-      const result: LocalReadFileResult = {
-        // Char count for the selected range
-        charCount,
-        // Content for the selected range
-        content,
-        createdTime: fileDocument.createdTime,
-        fileType: fileDocument.fileType,
-        filename: fileDocument.filename,
-        lineCount,
-        loc: effectiveLoc,
-        // Line count for the selected range
-        modifiedTime: fileDocument.modifiedTime,
-
-        // Total char count of the file
-        totalCharCount,
-        // Total line count of the file
-        totalLineCount,
-      };
-
-      try {
-        const stats = await statPromise(filePath);
-        if (stats.isDirectory()) {
-          logger.warn('Attempted to read directory content:', { filePath });
-          result.content = 'This is a directory and cannot be read as plain text.';
-          result.charCount = 0;
-          result.lineCount = 0;
-          // Keep total counts for directory as 0 as well, or decide if they should reflect metadata size
-          result.totalCharCount = 0;
-          result.totalLineCount = 0;
-        }
-      } catch (statError) {
-        logger.error(`Failed to get file status ${filePath}:`, statError);
-      }
-
-      return result;
-    } catch (error) {
-      logger.error(`Failed to read file ${filePath}:`, error);
-      const errorMessage = (error as Error).message;
-      return {
-        charCount: 0,
-        content: `Error accessing or processing file: ${errorMessage}`,
-        createdTime: new Date(),
-        fileType: path.extname(filePath).toLowerCase().replace('.', '') || 'unknown',
-        filename: path.basename(filePath),
-        lineCount: 0,
-        loc: [0, 0],
-        modifiedTime: new Date(),
-        totalCharCount: 0, // Add total counts to error result
-        totalLineCount: 0,
-      };
-    }
+  @IpcMethod()
+  async hashLocalFile({ path: filePath }: HashLocalFileParams): Promise<string> {
+    const hash = createHash('sha256');
+    for await (const chunk of createReadStream(filePath)) hash.update(chunk);
+    return hash.digest('hex');
   }
 
-  @ipcClientEvent('listLocalFiles')
-  async listLocalFiles({ path: dirPath }: ListLocalFileParams): Promise<FileResult[]> {
-    logger.debug('Listing directory contents:', { dirPath });
+  /**
+   * Size, MIME type, and line count of a local file, attached to `<localFile>` references so the
+   * model knows whether to read the file whole or in windows. Lines are counted by streaming, so
+   * memory stays flat; binary files, UTF-16 files and files above
+   * {@link LOCAL_FILE_LINE_COUNT_MAX_BYTES} skip it. UTF-16 is skipped because counting `0x0a` bytes
+   * also counts code units such as U+0A00-U+0AFF, so the number would be wrong rather than missing.
+   */
+  @IpcMethod()
+  async getLocalFileStats({ path: filePath }: LocalFileStatsParams): Promise<LocalFileStats> {
+    const fileStat = await stat(filePath);
+    if (!fileStat.isFile()) return { size: fileStat.size };
 
-    const results: FileResult[] = [];
-    try {
-      const entries = await readdirPromise(dirPath);
-      logger.debug('Directory entries retrieved successfully:', {
-        dirPath,
-        entriesCount: entries.length,
-      });
+    let head: Buffer | undefined;
+    let lineCount: number | undefined;
+    let lastByte: number | undefined;
 
-      for (const entry of entries) {
-        // Skip specific system files based on the ignore list
-        if (SYSTEM_FILES_TO_IGNORE.includes(entry)) {
-          logger.debug('Ignoring system file:', { fileName: entry });
-          continue;
-        }
-
-        const fullPath = path.join(dirPath, entry);
-        try {
-          const stats = await statPromise(fullPath);
-          const isDirectory = stats.isDirectory();
-          results.push({
-            createdTime: stats.birthtime,
-            isDirectory,
-            lastAccessTime: stats.atime,
-            modifiedTime: stats.mtime,
-            name: entry,
-            path: fullPath,
-            size: stats.size,
-            type: isDirectory ? 'directory' : path.extname(entry).toLowerCase().replace('.', ''),
-          });
-        } catch (statError) {
-          // Silently ignore files we can't stat (e.g. permissions)
-          logger.error(`Failed to get file status ${fullPath}:`, statError);
-        }
-      }
-
-      // Sort entries: folders first, then by name
-      results.sort((a, b) => {
-        if (a.isDirectory !== b.isDirectory) {
-          return a.isDirectory ? -1 : 1; // Directories first
-        }
-        // Add null/undefined checks for robustness if needed, though names should exist
-        return (a.name || '').localeCompare(b.name || ''); // Then sort by name
-      });
-
-      logger.debug('Directory listing successful', { dirPath, resultCount: results.length });
-      return results;
-    } catch (error) {
-      logger.error(`Failed to list directory ${dirPath}:`, error);
-      // Rethrow or return an empty array/error object depending on desired behavior
-      // For now, returning empty array on error listing directory itself
-      return [];
-    }
-  }
-
-  @ipcClientEvent('moveLocalFiles')
-  async handleMoveFiles({ items }: MoveLocalFilesParams): Promise<LocalMoveFilesResultItem[]> {
-    logger.debug('Starting batch file move:', { itemsCount: items?.length });
-
-    const results: LocalMoveFilesResultItem[] = [];
-
-    if (!items || items.length === 0) {
-      logger.warn('moveLocalFiles called with empty parameters');
-      return [];
-    }
-
-    // 逐个处理移动请求
-    for (const item of items) {
-      const { oldPath: sourcePath, newPath } = item;
-      const logPrefix = `[Moving file ${sourcePath} -> ${newPath}]`;
-      logger.debug(`${logPrefix} Starting process`);
-
-      const resultItem: LocalMoveFilesResultItem = {
-        newPath: undefined,
-        sourcePath,
-        success: false,
-      };
-
-      // 基本验证
-      if (!sourcePath || !newPath) {
-        logger.error(`${logPrefix} Parameter validation failed: source or target path is empty`);
-        resultItem.error = 'Both oldPath and newPath are required for each item.';
-        results.push(resultItem);
-        continue;
-      }
-
-      try {
-        // 检查源是否存在
-        try {
-          await accessPromise(sourcePath, fs.constants.F_OK);
-          logger.debug(`${logPrefix} Source file exists`);
-        } catch (accessError: any) {
-          if (accessError.code === 'ENOENT') {
-            logger.error(`${logPrefix} Source file does not exist`);
-            throw new Error(`Source path not found: ${sourcePath}`);
-          } else {
-            logger.error(`${logPrefix} Permission error accessing source file:`, accessError);
-            throw new Error(
-              `Permission denied accessing source path: ${sourcePath}. ${accessError.message}`,
-            );
-          }
-        }
-
-        // 检查目标路径是否与源路径相同
-        if (path.normalize(sourcePath) === path.normalize(newPath)) {
-          logger.info(`${logPrefix} Source and target paths are identical, skipping move`);
-          resultItem.success = true;
-          resultItem.newPath = newPath; // 即使未移动，也报告目标路径
-          results.push(resultItem);
-          continue;
-        }
-
-        // LBYL: 确保目标目录存在
-        const targetDir = path.dirname(newPath);
-        makeSureDirExist(targetDir);
-        logger.debug(`${logPrefix} Ensured target directory exists: ${targetDir}`);
-
-        // 执行移动 (rename)
-        await renamePromiseFs(sourcePath, newPath);
-        resultItem.success = true;
-        resultItem.newPath = newPath;
-        logger.info(`${logPrefix} Move successful`);
-      } catch (error) {
-        logger.error(`${logPrefix} Move failed:`, error);
-        // 使用与 handleMoveFile 类似的错误处理逻辑
-        let errorMessage = (error as Error).message;
-        if ((error as any).code === 'ENOENT')
-          errorMessage = `Source path not found: ${sourcePath}.`;
-        else if ((error as any).code === 'EPERM' || (error as any).code === 'EACCES')
-          errorMessage = `Permission denied to move the item at ${sourcePath}. Check file/folder permissions.`;
-        else if ((error as any).code === 'EBUSY')
-          errorMessage = `The file or directory at ${sourcePath} or ${newPath} is busy or locked by another process.`;
-        else if ((error as any).code === 'EXDEV')
-          errorMessage = `Cannot move across different file systems or drives. Source: ${sourcePath}, Target: ${newPath}.`;
-        else if ((error as any).code === 'EISDIR')
-          errorMessage = `Cannot overwrite a directory with a file, or vice versa. Source: ${sourcePath}, Target: ${newPath}.`;
-        else if ((error as any).code === 'ENOTEMPTY')
-          errorMessage = `The target directory ${newPath} is not empty (relevant on some systems if target exists and is a directory).`;
-        else if ((error as any).code === 'EEXIST')
-          errorMessage = `An item already exists at the target path: ${newPath}.`;
-        // 保留来自访问检查或目录检查的更具体错误
-        else if (
-          !errorMessage.startsWith('Source path not found') &&
-          !errorMessage.startsWith('Permission denied accessing source path') &&
-          !errorMessage.includes('Target directory')
+    for await (const chunk of createReadStream(filePath)) {
+      const buffer = chunk as Buffer;
+      if (!head) {
+        head = buffer.subarray(0, LOCAL_FILE_SNIFF_BYTES);
+        if (
+          sniffBinaryBuffer(head).isBinary ||
+          isUtf16Buffer(head) ||
+          fileStat.size > LOCAL_FILE_LINE_COUNT_MAX_BYTES
         ) {
-          // Keep the original error message if none of the specific codes match
+          break;
         }
-        resultItem.error = errorMessage;
+        lineCount = 0;
       }
-      results.push(resultItem);
+      for (
+        let index = buffer.indexOf(0x0a);
+        index !== -1;
+        index = buffer.indexOf(0x0a, index + 1)
+      ) {
+        lineCount! += 1;
+      }
+      lastByte = buffer.at(-1);
     }
 
-    logger.debug('Batch file move completed', {
-      successCount: results.filter((r) => r.success).length,
-      totalCount: results.length,
-    });
-    return results;
+    // A final line without a trailing newline still counts as a line.
+    if (lineCount !== undefined && lastByte !== undefined && lastByte !== 0x0a) lineCount += 1;
+
+    const mimeType = await resolveMimeType(filePath, head ?? new Uint8Array()).catch(
+      () => undefined,
+    );
+
+    return { lineCount, mimeType: mimeType || undefined, size: fileStat.size };
   }
 
-  @ipcClientEvent('renameLocalFile')
+  @IpcMethod()
+  async readFile(params: LocalReadFileParams): Promise<LocalReadFileResult> {
+    logger.debug('Starting to read file:', {
+      filePath: params.path,
+      fullContent: params.fullContent,
+      loc: params.loc,
+    });
+
+    // Image files: `local-file-shell` refuses binary, and the agent should be
+    // able to actually *see* the image (vision) rather than hit "Unsupported
+    // binary file type". Delegate the upload to the embedded CLI
+    // (`lh file upload`) and return a durable { fileId, url } — bytes never
+    // cross IPC and never reach the DB.
+    const imageMimeType = getLocalImageMimeType(params.path);
+    if (imageMimeType) {
+      return readLocalImageFile(params, imageMimeType, {
+        // Degrade with the real cause so the model can tell a full storage
+        // quota (retrying is pointless) apart from a transient network error.
+        describeUploadError: (error) => {
+          logger.warn('Image upload failed:', { error, filePath: params.path });
+          return formatUploadFailure(describeUploadFailure(error));
+        },
+        upload: async (filePath) => {
+          const prepared = await shrinkImageForUpload(filePath, imageMimeType);
+          try {
+            const record = await this.app
+              .getService(RemoteFileUploadService)
+              .uploadLocalFile(prepared.filePath);
+            if (!record?.url) logger.warn('Image upload returned no record:', { filePath });
+            return record;
+          } finally {
+            await prepared.cleanup();
+          }
+        },
+      });
+    }
+
+    return readLocalFile(params);
+  }
+
+  @IpcMethod()
+  async listLocalFiles(
+    params: ListLocalFileParams,
+  ): Promise<{ files: FileResult[]; totalCount: number }> {
+    logger.debug('Listing directory contents:', params);
+    return listLocalFiles(params) as any;
+  }
+
+  @IpcMethod()
+  async handleMoveFiles({ items, cwd }: MoveLocalFilesParams): Promise<LocalMoveFilesResultItem[]> {
+    logger.debug('Starting batch file move:', { itemsCount: items?.length });
+    return moveLocalFiles({ cwd, items });
+  }
+
+  @IpcMethod()
   async handleRenameFile({
     path: currentPath,
     newName,
@@ -362,120 +551,391 @@ export default class LocalFileCtr extends ControllerModule {
     newName: string;
     path: string;
   }): Promise<RenameLocalFileResult> {
-    const logPrefix = `[Renaming ${currentPath} -> ${newName}]`;
-    logger.debug(`${logPrefix} Starting rename request`);
+    logger.debug(`Renaming ${currentPath} -> ${newName}`);
+    return renameLocalFile({ newName, path: currentPath });
+  }
 
-    // Basic validation (can also be done in frontend action)
-    if (!currentPath || !newName) {
-      logger.error(`${logPrefix} Parameter validation failed: path or new name is empty`);
-      return { error: 'Both path and newName are required.', newPath: '', success: false };
-    }
-    // Prevent path traversal or using invalid characters/names
-    if (
-      newName.includes('/') ||
-      newName.includes('\\') ||
-      newName === '.' ||
-      newName === '..' ||
-      /["*/:<>?\\|]/.test(newName) // Check for typical invalid filename characters
-    ) {
-      logger.error(`${logPrefix} New filename contains illegal characters: ${newName}`);
-      return {
-        error:
-          'Invalid new name. It cannot contain path separators (/, \\), be "." or "..", or include characters like < > : " / \\ | ? *.',
-        newPath: '',
-        success: false,
-      };
-    }
+  @IpcMethod()
+  async handleWriteFile({ path: filePath, content, cwd }: WriteLocalFileParams) {
+    logger.debug(`Writing file ${filePath}`, { contentLength: content?.length });
+    return writeLocalFile({ content, cwd, path: filePath });
+  }
 
-    let newPath: string;
+  /** Create a new file. Fails instead of overwriting when the path is taken. */
+  @IpcMethod()
+  async handleCreateFile({
+    path: filePath,
+    content,
+    cwd,
+  }: CreateLocalFileParams): Promise<CreateLocalEntryResult> {
+    logger.debug(`Creating file ${filePath}`);
+    return createLocalFile({ content, cwd, path: filePath });
+  }
+
+  /** Create a new folder. Fails instead of reusing it when the path is taken. */
+  @IpcMethod()
+  async handleCreateDirectory({
+    path: dirPath,
+    cwd,
+  }: CreateLocalDirectoryParams): Promise<CreateLocalEntryResult> {
+    logger.debug(`Creating directory ${dirPath}`);
+    return createLocalDirectory({ cwd, path: dirPath });
+  }
+
+  /**
+   * Copy files/folders, or duplicate them in place when an item has no
+   * `targetPath`. Never overwrites; each item reports its own outcome.
+   */
+  @IpcMethod()
+  async handleCopyFiles({ items, cwd }: CopyLocalFilesParams): Promise<LocalCopyFilesResultItem[]> {
+    logger.debug('Starting batch file copy:', { itemsCount: items?.length });
+    return copyLocalFiles({ cwd, items });
+  }
+
+  @IpcMethod()
+  async auditSafePaths({
+    paths,
+    resolveAgainstScope,
+  }: AuditSafePathsParams): Promise<AuditSafePathsResult> {
+    logger.debug('Auditing safe paths', { count: paths.length, resolveAgainstScope });
+
+    return {
+      allSafe: await areAllPathsSafeOnDisk(paths, resolveAgainstScope),
+    };
+  }
+
+  @IpcMethod()
+  async getLocalFilePreviewUrl({
+    accept,
+    allowExternalFile,
+    path: filePath,
+    resourceScope,
+    workingDirectory,
+  }: LocalFilePreviewUrlParams): Promise<LocalFilePreviewUrlResult> {
     try {
-      const dir = path.dirname(currentPath);
-      newPath = path.join(dir, newName);
-      logger.debug(`${logPrefix} Calculated new path: ${newPath}`);
+      const url = await this.app.localFileProtocolManager.createPreviewUrl({
+        accept,
+        allowExternalFile,
+        filePath,
+        ...(resourceScope && { resourceScope }),
+        workspaceRoot: workingDirectory,
+      });
 
-      // Check if paths are identical after calculation
-      if (path.normalize(currentPath) === path.normalize(newPath)) {
-        logger.info(
-          `${logPrefix} Source path and calculated target path are identical, skipping rename`,
-        );
-        // Consider success as no change is needed, but maybe inform the user?
-        // Return success for now.
-        return { newPath, success: true };
+      if (!url) {
+        return outsideWorkspacePreviewFailure();
       }
-    } catch (error) {
-      logger.error(`${logPrefix} Failed to calculate new path:`, error);
-      return {
-        error: `Internal error calculating the new path: ${(error as Error).message}`,
-        newPath: '',
-        success: false,
-      };
-    }
 
-    // Perform the rename operation using fs.promises.rename directly
-    try {
-      await renamePromise(currentPath, newPath);
-      logger.info(`${logPrefix} Rename successful: ${currentPath} -> ${newPath}`);
-      // Optionally return the newPath if frontend needs it
-      // return { success: true, newPath: newPath };
-      return { newPath, success: true };
+      return { success: true, url };
     } catch (error) {
-      logger.error(`${logPrefix} Rename failed:`, error);
-      let errorMessage = (error as Error).message;
-      // Provide more specific error messages based on common codes
-      if ((error as any).code === 'ENOENT') {
-        errorMessage = `File or directory not found at the original path: ${currentPath}.`;
-      } else if ((error as any).code === 'EPERM' || (error as any).code === 'EACCES') {
-        errorMessage = `Permission denied to rename the item at ${currentPath}. Check file/folder permissions.`;
-      } else if ((error as any).code === 'EBUSY') {
-        errorMessage = `The file or directory at ${currentPath} or ${newPath} is busy or locked by another process.`;
-      } else if ((error as any).code === 'EISDIR' || (error as any).code === 'ENOTDIR') {
-        errorMessage = `Cannot rename - conflict between file and directory. Source: ${currentPath}, Target: ${newPath}.`;
-      } else if ((error as any).code === 'EEXIST') {
-        // Target already exists
-        errorMessage = `Cannot rename: an item with the name '${newName}' already exists at this location.`;
-      }
-      // Add more specific checks as needed
-      return { error: errorMessage, newPath: '', success: false };
+      logger.error('Failed to create local file preview URL:', error);
+      return toLocalFilePreviewFailure(error);
     }
   }
 
-  @ipcClientEvent('writeLocalFile')
-  async handleWriteFile({ path: filePath, content }: WriteLocalFileParams) {
-    const logPrefix = `[Writing file ${filePath}]`;
-    logger.debug(`${logPrefix} Starting to write file`, { contentLength: content?.length });
-
-    // 验证参数
-    if (!filePath) {
-      logger.error(`${logPrefix} Parameter validation failed: path is empty`);
-      return { error: 'Path cannot be empty', success: false };
-    }
-
-    if (content === undefined) {
-      logger.error(`${logPrefix} Parameter validation failed: content is empty`);
-      return { error: 'Content cannot be empty', success: false };
-    }
-
+  @IpcMethod()
+  async getExternalAssetForPublishUrl({
+    path: filePath,
+    workingDirectory,
+  }: ExternalAssetForPublishParams): Promise<LocalFilePreviewUrlResult> {
     try {
-      // 确保目标目录存在
-      const dirname = path.dirname(filePath);
-      logger.debug(`${logPrefix} Creating directory: ${dirname}`);
-      fs.mkdirSync(dirname, { recursive: true });
+      const url = await this.app.localFileProtocolManager.createPreviewUrl({
+        allowExternalFile: true,
+        filePath,
+        persistExternalApproval: false,
+        workspaceRoot: workingDirectory,
+      });
+      return url
+        ? { success: true, url }
+        : { error: 'Failed to approve external publish asset', success: false };
+    } catch (error) {
+      logger.error('Failed to create external publish asset URL:', error);
+      return { error: (error as Error).message, success: false };
+    }
+  }
 
-      // 写入文件内容
-      logger.debug(`${logPrefix} Starting to write content to file`);
-      await writeFilePromise(filePath, content, 'utf8');
-      logger.info(`${logPrefix} File written successfully`, {
-        path: filePath,
-        size: content.length,
+  async readExternalAssetForPublish({
+    path: filePath,
+    workingDirectory,
+  }: ExternalAssetForPublishParams): Promise<ExternalAssetForPublishResult> {
+    try {
+      const asset = await this.app.localFileProtocolManager.readExternalFileForPublish({
+        filePath,
+        workspaceRoot: workingDirectory,
+      });
+      if (!asset) return { error: 'Failed to approve external publish asset', success: false };
+
+      return {
+        base64: asset.buffer.toString('base64'),
+        contentType: asset.contentType,
+        success: true,
+      };
+    } catch (error) {
+      logger.error('Failed to read external publish asset:', error);
+      return { error: (error as Error).message, success: false };
+    }
+  }
+
+  @IpcMethod()
+  async copyAssetForPublish({
+    from,
+    to,
+    workingDirectory,
+  }: CopyAssetForPublishParams): Promise<CopyAssetForPublishResult> {
+    try {
+      const copied = await this.app.localFileProtocolManager.copyExternalFileForPublish({
+        filePath: from,
+        targetPath: to,
+        workspaceRoot: workingDirectory,
+      });
+      return copied
+        ? { success: true }
+        : { error: 'Failed to copy publish asset into the workspace', success: false };
+    } catch (error) {
+      logger.error('Failed to copy publish asset:', error);
+      return { error: (error as Error).message, success: false };
+    }
+  }
+
+  @IpcMethod()
+  async getLocalFilePreview({
+    accept,
+    allowExternalFile,
+    path: filePath,
+    workingDirectory,
+  }: LocalFilePreviewUrlParams): Promise<LocalFilePreviewResult> {
+    try {
+      const preview = await this.app.localFileProtocolManager.readPreviewFile({
+        accept,
+        allowExternalFile,
+        filePath,
+        workspaceRoot: workingDirectory,
       });
 
-      return { success: true };
-    } catch (error) {
-      logger.error(`${logPrefix} Failed to write file:`, error);
+      if (!preview) {
+        return outsideWorkspacePreviewFailure();
+      }
+
       return {
-        error: `Failed to write file: ${(error as Error).message}`,
+        preview: serializePreviewFile(preview),
+        success: true,
+      };
+    } catch (error) {
+      logger.error('Failed to read local file preview:', error);
+      return toLocalFilePreviewFailure(error);
+    }
+  }
+
+  /**
+   * Host deps for the shared skill-archive cache: this keeps the renderer-IPC
+   * path (here) and the gateway RPC path (`GatewayConnectionCtr` →
+   * `@lobechat/device-control`) on ONE cache directory and one proxy-aware
+   * fetch, so a skill prepared by either entry point is a cache hit for the
+   * other.
+   */
+  getSkillDirectoryDeps(): SkillDirectoryDeps {
+    return {
+      fetchSkillArchive: netFetch,
+      skillCacheRoot: path.join(this.app.appStoragePath, 'file-storage', 'skills'),
+    };
+  }
+
+  @IpcMethod()
+  async handlePrepareSkillDirectory(
+    params: PrepareSkillDirectoryParams,
+  ): Promise<PrepareSkillDirectoryResult> {
+    const { prepareSkillDirectory } = await import('@lobechat/device-control/skill-directory');
+    return prepareSkillDirectory(params, this.getSkillDirectoryDeps());
+  }
+
+  @IpcMethod()
+  async handleResolveSkillResourcePath({
+    path: resourcePath,
+    url,
+    zipHash,
+  }: ResolveSkillResourcePathParams): Promise<ResolveSkillResourcePathResult> {
+    const prepared = await this.handlePrepareSkillDirectory({ url, zipHash });
+
+    if (!prepared.success) {
+      return { error: prepared.error, success: false };
+    }
+
+    const normalizedRoot = path.resolve(prepared.extractedDir);
+    const fullPath = path.resolve(normalizedRoot, resourcePath);
+
+    if (fullPath !== normalizedRoot && !fullPath.startsWith(`${normalizedRoot}${path.sep}`)) {
+      return {
+        error: `Unsafe skill resource path: ${resourcePath}`,
         success: false,
       };
+    }
+
+    return {
+      fullPath,
+      success: true,
+    };
+  }
+
+  // ==================== Search & Find ====================
+
+  @IpcMethod()
+  async getProjectFileIndex(
+    params: ProjectFileIndexParams = {},
+  ): Promise<DeviceProjectFileIndexResult> {
+    const startedAt = Date.now();
+    const result = await defaultGetProjectFileIndex(params);
+
+    logger.debug('Project file index completed', {
+      duration: Date.now() - startedAt,
+      entries: result.entries.length,
+      requestedScope: params.scope,
+      root: result.root,
+      source: result.source,
+    });
+    await this.approveProjectRootForPreview(result.root);
+
+    return result;
+  }
+
+  @IpcMethod()
+  async searchProjectFiles(params: ProjectFileSearchParams): Promise<ProjectFileSearchResult> {
+    const startedAt = Date.now();
+    const result = await defaultSearchProjectFiles(params);
+
+    logger.debug('Project file search completed', {
+      duration: Date.now() - startedAt,
+      entries: result.entries.length,
+      query: params.query,
+      requestedScope: params.scope,
+      root: result.root,
+      source: result.source,
+    });
+    await this.approveProjectRootForPreview(result.root);
+
+    return result;
+  }
+
+  /**
+   * Children of one directory inside an already-indexed project. The file tree
+   * calls this when the user expands a directory the index collapsed, so an
+   * ignored subtree costs a read only when someone opens it.
+   */
+  @IpcMethod()
+  async listProjectDirectory(
+    params: ProjectDirectoryListParams,
+  ): Promise<ProjectDirectoryListResult> {
+    logger.debug('Listing project directory', {
+      relativePath: params.relativePath,
+      root: params.root,
+    });
+
+    return defaultListProjectDirectory(params);
+  }
+
+  /**
+   * Move files/folders to the OS trash. Recoverable by design — the file tree
+   * never hard-deletes, so a misclick can be undone from Finder / Explorer.
+   */
+  @IpcMethod()
+  async trashLocalFiles({ paths }: TrashLocalFilesParams): Promise<TrashLocalFilesResult> {
+    if (paths.length === 0) return { items: [], success: false };
+
+    logger.debug('Trashing local files', { count: paths.length });
+
+    // Every path is attempted and reported. Stopping at the first failure would
+    // leave the caller unable to tell which earlier paths are already in the
+    // trash, so it could neither refresh its tree nor safely retry the batch.
+    const items: TrashLocalFilesResultItem[] = [];
+    for (const rawPath of paths) {
+      const targetPath = expandTilde(rawPath) ?? rawPath;
+      try {
+        await shell.trashItem(targetPath);
+        items.push({ path: rawPath, success: true });
+      } catch (error) {
+        logger.error('Failed to trash local file:', error);
+        items.push({ error: (error as Error).message, path: rawPath, success: false });
+      }
+    }
+
+    return { items, success: items.every((item) => item.success) };
+  }
+
+  /**
+   * Handle IPC event for local file search
+   */
+  @IpcMethod()
+  async handleLocalFilesSearch(params: LocalSearchFilesParams): Promise<FileResult[]> {
+    const effectiveDirectory = expandTilde(params.directory ?? params.scope);
+
+    logger.debug('Received file search request:', {
+      directory: params.directory,
+      effectiveDirectory,
+      limit: params.limit,
+      keywords: params.keywords,
+      scope: params.scope,
+    });
+
+    // Build search options from params, mapping directory to onlyIn
+    const options: SearchOptions = {
+      contentContains: params.contentContains,
+      createdAfter: params.createdAfter ? new Date(params.createdAfter) : undefined,
+      createdBefore: params.createdBefore ? new Date(params.createdBefore) : undefined,
+      detailed: params.detailed,
+      exclude: params.exclude,
+      fileTypes: params.fileTypes,
+      keywords: params.keywords,
+      limit: params.limit || 30,
+      liveUpdate: params.liveUpdate,
+      modifiedAfter: params.modifiedAfter ? new Date(params.modifiedAfter) : undefined,
+      modifiedBefore: params.modifiedBefore ? new Date(params.modifiedBefore) : undefined,
+      onlyIn: effectiveDirectory,
+      sortBy: params.sortBy,
+      sortDirection: params.sortDirection,
+    };
+
+    try {
+      const results = await this.searchService.search(options.keywords, options);
+      logger.debug('File search completed', {
+        count: results.length,
+        directory: params.directory,
+        effectiveDirectory,
+        results: results.slice(0, 5).map((result) => ({
+          engine: result.engine,
+          isDirectory: result.isDirectory,
+          name: result.name,
+          path: result.path,
+        })),
+        scope: params.scope,
+      });
+      return results;
+    } catch (error) {
+      logger.error('File search failed:', error);
+      return [];
+    }
+  }
+
+  @IpcMethod()
+  async handleGrepContent(params: GrepContentParams): Promise<GrepContentResult> {
+    return this.contentSearchService.grep(params);
+  }
+
+  @IpcMethod()
+  async handleGlobFiles(params: GlobFilesParams): Promise<GlobFilesResult> {
+    return this.searchService.glob(params);
+  }
+
+  // ==================== File Editing ====================
+
+  @IpcMethod()
+  async handleEditFile(params: EditLocalFileParams): Promise<EditLocalFileResult> {
+    logger.debug(`Editing file ${params.file_path}`, { replace_all: params.replace_all });
+    return editLocalFile(params);
+  }
+
+  private async approveProjectRootForPreview(root: string) {
+    try {
+      await this.app.localFileProtocolManager.approveIndexedProjectRoot(root);
+    } catch (error) {
+      logger.error(`Failed to approve project preview root ${root}:`, error);
     }
   }
 }

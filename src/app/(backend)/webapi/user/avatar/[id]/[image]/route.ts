@@ -1,10 +1,9 @@
+import { serverDB } from '@/database/server';
 import { UserService } from '@/server/services/user';
-
-export const runtime = 'nodejs';
 
 type Params = Promise<{ id: string; image: string }>;
 
-// 扩展名到内容类型的映射
+// Mapping of file extensions to content types
 const CONTENT_TYPE_MAP: Record<string, string> = {
   avif: 'image/avif',
   bmp: 'image/bmp',
@@ -21,7 +20,7 @@ const CONTENT_TYPE_MAP: Record<string, string> = {
   webp: 'image/webp',
 };
 
-// 根据文件扩展名确定内容类型
+// Determine content type based on file extension
 function getContentType(filename: string): string {
   const extension = filename.split('.').pop()?.toLowerCase() || '';
   return CONTENT_TYPE_MAP[extension] || 'application/octet-stream';
@@ -31,7 +30,7 @@ export const GET = async (req: Request, segmentData: { params: Params }) => {
   try {
     const params = await segmentData.params;
     const type = getContentType(params.image);
-    const userService = new UserService();
+    const userService = new UserService(serverDB);
 
     const userAvatar = await userService.getUserAvatar(params.id, params.image);
     if (!userAvatar) {
@@ -43,6 +42,7 @@ export const GET = async (req: Request, segmentData: { params: Params }) => {
     return new Response(userAvatar, {
       headers: {
         'Cache-Control': 'public, max-age=31536000, immutable',
+        'Content-Security-Policy': "default-src 'none'; sandbox",
         'Content-Type': type,
       },
       status: 200,

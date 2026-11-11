@@ -1,10 +1,24 @@
+import { getUserAuth } from '@lobechat/utils/server';
 import debug from 'debug';
-import { NextRequest, NextResponse } from 'next/server';
+import { type NextRequest } from 'next/server';
+import { NextResponse } from 'next/server';
 
+import { getServerDB } from '@/database/core/db-adaptor';
+import { isAcceptanceReviewClient } from '@/libs/oidc-provider/acceptanceReview';
+import { describeReviewTarget } from '@/server/services/acceptanceReview/reviewTarget';
 import { OIDCService } from '@/server/services/oidc';
-import { getUserAuth } from '@/utils/server/auth';
 
 const log = debug('lobe-oidc:consent');
+
+const reviewTargetOf = async (resource: unknown) => {
+  const { userId } = await getUserAuth();
+  return describeReviewTarget(await getServerDB(), userId, resource);
+};
+
+const WRONG_ORIGIN = {
+  error: 'wrong_origin',
+  error_description: 'Open this acceptance from its preview address',
+};
 
 export async function POST(request: NextRequest) {
   log('Received POST request for /oidc/consent, URL: %s', request.url);
@@ -44,8 +58,18 @@ export async function POST(request: NextRequest) {
     }
 
     const { prompt } = details;
+    const reviewTarget =
+      prompt.name === 'consent' && isAcceptanceReviewClient(details.params.client_id as string)
+        ? await reviewTargetOf(details.params.resource)
+        : undefined;
     let result;
-    if (consent === 'accept') {
+    if (
+      reviewTarget?.allowed === false &&
+      reviewTarget.kind === 'acceptance' &&
+      reviewTarget.reason === 'wrongOrigin'
+    ) {
+      result = WRONG_ORIGIN;
+    } else if (consent === 'accept') {
       log(`User accepted the request, Handling 'login' prompt`);
       const { userId } = await getUserAuth();
       log('Obtained userId: %s', userId);
@@ -57,14 +81,26 @@ export async function POST(request: NextRequest) {
       } else {
         log(`Handling 'consent' prompt`);
 
-        // 1. 获取必要的 ID
+        // 1. Get necessary IDs
         const clientId = details.params.client_id as string;
 
-        // 2. 查找或创建 Grant 对象
+        if (reviewTarget?.allowed === false) {
+          const denied = await oidcService.getInteractionResult(uid, {
+            error: 'access_denied',
+            error_description: 'No access to this acceptance',
+          });
+          const { pathname, search, hash } = new URL(denied);
+          return new NextResponse(null, {
+            headers: { location: `${pathname}${search}${hash}` },
+            status: 303,
+          });
+        }
+
+        // 2. Find or create Grant object
         const grant = await oidcService.findOrCreateGrants(userId!, clientId, details.grantId);
 
-        // 3. 将用户同意的 scopes 和 claims 添加到 Grant 对象
-        //    这些信息通常在 details.prompt.details 中
+        // 3. Add user-consented scopes and claims to Grant object
+        //    This information is typically in details.prompt.details
         const missingOIDCScope = (prompt.details.missingOIDCScope as string[]) || [];
         if (missingOIDCScope) {
           grant.addOIDCScope(missingOIDCScope.join(' '));
@@ -84,16 +120,16 @@ export async function POST(request: NextRequest) {
             log('Added resource scopes for %s to grant: %s', indicator, scopes.join(' '));
           }
         }
-        // 如果使用了 RAR (Rich Authorization Requests)，也需要添加到 grant
+        // If RAR (Rich Authorization Requests) is used, it also needs to be added to grant
         // if (prompt.details.rar) {
         //   prompt.details.rar.forEach(detail => grant.addRar(detail));
         // }
 
-        // 4. 保存 Grant 对象以获取其 jti (grantId)
+        // 4. Save Grant object to get its jti (grantId)
         const newGrantId = await grant.save();
         log('Saved grant with ID: %s', newGrantId);
 
-        // 5. 准备包含 grantId 的 result
+        // 5. Prepare result containing grantId
         result = { consent: { grantId: newGrantId } };
 
         log('Consent result prepared with grantId');
@@ -113,24 +149,15 @@ export async function POST(request: NextRequest) {
     const internalRedirectUrlString = await oidcService.getInteractionResult(uid, result);
     log('OIDC Provider internal redirect URL string: %s', internalRedirectUrlString);
 
-    // // Construct the handoff URL
-    // const handoffUrl = new URL('/oauth/handoff', request.nextUrl.origin);
-    // // Set the original redirect URL as the 'target' query parameter (URL encoded)
-    // handoffUrl.searchParams.set('target', internalRedirectUrlString);
-    //
-    // log('Redirecting to handoff page: %s', handoffUrl.toString());
-    // // Redirect to the handoff page
-    // return NextResponse.redirect(handoffUrl.toString(), {
-    //   headers: request.headers, // Keep original headers if necessary
-    //   status: 303,
-    // });
+    // The gateway rewrites Host on the way to the origin, so the server cannot tell which
+    // public origin the browser is on. A relative Location keeps it on the origin that holds
+    // the interaction cookies.
+    const { pathname, search, hash } = new URL(internalRedirectUrlString);
+    const location = `${pathname}${search}${hash}`;
 
-    return NextResponse.redirect(internalRedirectUrlString, {
-      headers: request.headers,
-      status: 303,
-    });
+    log('Redirecting to: %s', location);
+    return new NextResponse(null, { headers: { location }, status: 303 });
   } catch (error) {
-    log('Error processing consent: %s', error instanceof Error ? error.message : 'unknown error');
     console.error('Error processing consent:', error);
     return NextResponse.json(
       {

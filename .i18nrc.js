@@ -1,14 +1,16 @@
 const { defineConfig } = require('@lobehub/i18n-cli');
+const fs = require('node:fs');
+const path = require('node:path');
 
 module.exports = defineConfig({
-  entry: 'locales/zh-CN',
-  entryLocale: 'zh-CN',
+  entry: 'locales/en-US',
+  entryLocale: 'en-US',
   output: 'locales',
   outputLocales: [
     'ar',
     'bg-BG',
+    'zh-CN',
     'zh-TW',
-    'en-US',
     'ru-RU',
     'ja-JP',
     'ko-KR',
@@ -23,24 +25,45 @@ module.exports = defineConfig({
     'vi-VN',
     'fa-IR',
   ],
+  reference: [
+    'These are UI strings for LobeHub, an AI agent platform.',
+    '',
+    'Rules for every locale:',
+    '- Use exactly one translation per product concept across the whole locale.',
+    '  Never alternate between synonyms for the same English term.',
+    '- "Agent" and "Assistant" are two distinct concepts here and must not share',
+    '  a translation.',
+    '- Keep every interpolation variable ({{like_this}}) and tag exactly as it',
+    '  appears in the source: same names, same count. Never add a variable the',
+    '  source does not have, and never drop one it does.',
+    '- Leave product and brand names untranslated: LobeHub, LobeAI, Claude Code,',
+    '  Codex, OpenAI, Azure, GitHub, MCP.',
+    '',
+    'Turkish (tr-TR) glossary:',
+    '- Agent -> Ajan. Not Temsilci, Aracı, Asistan or Ajans. "Ajans" means an',
+    '  advertising agency, and "Aracı" is also the accusative of "araç" (tool).',
+    '- Assistant -> Asistan',
+    '- Skill -> Beceri, Tool -> Araç, Workspace -> çalışma alanı',
+    '- Knowledge base -> bilgi tabanı, Quick Composer -> Hızlı Oluşturucu',
+    '- Turkish vowel harmony applies to suffixes and to the separate question',
+    '  particle. "Ajan" takes back vowels: Ajanı, Ajana, Ajandan, Ajanlar, and',
+    '  the particle is "mı", not "mi".',
+  ].join('\n'),
   temperature: 0,
   saveImmediately: true,
-  modelName: 'gpt-4.1-mini',
+  modelName: 'gpt-4o',
   experimental: {
     jsonMode: true,
   },
   markdown: {
-    reference: '你需要保持 mdx 的组件格式，输出文本不需要在最外层包裹任何代码块语法',
-    entry: ['./README.zh-CN.md', './contributing/**/*.zh-CN.md', './docs/**/*.zh-CN.mdx'],
-    entryLocale: 'zh-CN',
-    outputLocales: ['en-US'],
+    reference:
+      'You need to maintain the component format of the mdx file; the output text does not need to be wrapped in any code block syntax on the outermost layer.\n' +
+      fs.readFileSync(path.join(__dirname, 'docs/glossary.mdx'), 'utf8'),
+    entry: ['./README.md', './docs/**/*.md', './docs/**/*.mdx'],
+    entryLocale: 'en-US',
+    outputLocales: ['zh-CN'],
     includeMatter: true,
-    exclude: [
-      './src/**/*',
-      './contributing/_Sidebar.md',
-      './contributing/_Footer.md',
-      './contributing/Home.md',
-    ],
+    exclude: ['./README.zh-CN.md', './docs/**/*.zh-CN.md', './docs/**/*.zh-CN.mdx'],
     outputExtensions: (locale, { filePath }) => {
       if (filePath.includes('.mdx')) {
         if (locale === 'en-US') return '.mdx';

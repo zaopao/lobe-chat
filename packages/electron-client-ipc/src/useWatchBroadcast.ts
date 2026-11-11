@@ -1,13 +1,12 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 
-import { MainBroadcastEventKey, MainBroadcastParams } from './events';
+import type { MainBroadcastEventKey, MainBroadcastParams } from './events';
 
 interface ElectronAPI {
   ipcRenderer: {
-    on: (event: MainBroadcastEventKey, listener: (e: any, data: any) => void) => void;
-    removeListener: (event: MainBroadcastEventKey, listener: (e: any, data: any) => void) => void;
+    on: (event: MainBroadcastEventKey, listener: (e: any, data: any) => void) => () => void;
   };
 }
 
@@ -21,17 +20,19 @@ export const useWatchBroadcast = <T extends MainBroadcastEventKey>(
   event: T,
   handler: (data: MainBroadcastParams<T>) => void,
 ) => {
+  const handlerRef = useRef<typeof handler>(handler);
+
+  useLayoutEffect(() => {
+    handlerRef.current = handler;
+  }, [handler]);
+
   useEffect(() => {
     if (!window.electron) return;
 
-    const listener = (e: any, data: MainBroadcastParams<T>) => {
-      handler(data);
+    const listener = (_e: any, data: MainBroadcastParams<T>) => {
+      handlerRef.current(data);
     };
 
-    window.electron.ipcRenderer.on(event, listener);
-
-    return () => {
-      window.electron.ipcRenderer.removeListener(event, listener);
-    };
-  }, []);
+    return window.electron.ipcRenderer.on(event, listener);
+  }, [event]);
 };

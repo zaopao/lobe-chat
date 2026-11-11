@@ -1,38 +1,35 @@
-import { TextArea as LobeTextArea, TextAreaProps as Props } from '@lobehub/ui';
-import { TextAreaRef } from 'antd/es/input/TextArea';
+import { TextArea as LobeTextArea, type TextAreaProps as Props } from '@lobehub/ui';
 import { memo, useRef, useState } from 'react';
+
+import { useIMECompositionEvent } from '@/hooks/useIMECompositionEvent';
 
 interface TextAreaProps extends Omit<Props, 'onChange'> {
   onChange?: (value: string) => void;
 }
 
-const TextArea = memo<TextAreaProps>(({ onChange, value: defaultValue, ...props }) => {
-  const ref = useRef<TextAreaRef>(null);
-  const isChineseInput = useRef(false);
+const TextArea = memo<TextAreaProps>(({ onBlur, onChange, value: defaultValue, ...props }) => {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const { compositionProps, isComposingRef } = useIMECompositionEvent();
 
   const [value, setValue] = useState(defaultValue as string);
 
   return (
     <LobeTextArea
-      onBlur={() => {
+      ref={ref}
+      onBlur={(e) => {
         onChange?.(value);
+        onBlur?.(e);
       }}
       onChange={(e) => {
         setValue(e.target.value);
       }}
-      onCompositionEnd={() => {
-        isChineseInput.current = false;
-      }}
-      onCompositionStart={() => {
-        isChineseInput.current = true;
-      }}
+      {...compositionProps}
       onPressEnter={() => {
-        if (isChineseInput.current) return;
+        if (isComposingRef.current) return;
         onChange?.(value);
       }}
-      ref={ref}
       {...props}
-      value={value}
+      value={value ?? ''}
     />
   );
 });

@@ -1,114 +1,98 @@
-import { Button, Form, type FormItemProps, Segmented } from '@lobehub/ui';
-import { Switch } from 'antd';
-import { CopyIcon } from 'lucide-react';
+import { Button } from '@lobehub/ui';
+import { CopyIcon, DownloadIcon } from 'lucide-react';
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Flexbox } from 'react-layout-kit';
 
-import { FORM_STYLE } from '@/const/layoutTokens';
 import { useImgToClipboard } from '@/hooks/useImgToClipboard';
-import { useIsMobile } from '@/hooks/useIsMobile';
 import { ImageType, imageTypeOptions, useScreenshot } from '@/hooks/useScreenshot';
-import { useSessionStore } from '@/store/session';
-import { sessionMetaSelectors } from '@/store/session/selectors';
+import { useAgentStore } from '@/store/agent';
+import { agentSelectors } from '@/store/agent/selectors';
 
-import { useStyles } from '../style';
+import ExportLayout, { ToolbarDivider } from '../components/ExportLayout';
+import { SelectChip, ToggleChip } from '../components/OptionChips';
+import { useShareData } from '../ShareDataProvider';
 import Preview from './Preview';
-import { FieldType } from './type';
+import { type FieldType } from './type';
+import { WidthMode } from './type';
 
 const DEFAULT_FIELD_VALUE: FieldType = {
   imageType: ImageType.JPG,
-  withBackground: true,
+  widthMode: WidthMode.Wide,
+  withBackground: false,
   withFooter: true,
   withPluginInfo: false,
   withSystemRole: false,
 };
 
-const ShareImage = memo<{ mobile?: boolean }>(() => {
-  const currentAgentTitle = useSessionStore(sessionMetaSelectors.currentAgentTitle);
-  const [fieldValue, setFieldValue] = useState<FieldType>(DEFAULT_FIELD_VALUE);
+const ShareImage = memo<{ mobile?: boolean }>(({ mobile }) => {
+  const currentAgentTitle = useAgentStore(agentSelectors.currentAgentDisplayName);
+  const [fieldValue, setFieldValue] = useState<FieldType>(
+    mobile ? { ...DEFAULT_FIELD_VALUE, widthMode: WidthMode.Narrow } : DEFAULT_FIELD_VALUE,
+  );
   const { t } = useTranslation(['chat', 'common']);
-  const { styles } = useStyles();
+  const { context, dbMessages, displayMessages } = useShareData();
   const { loading, onDownload, title } = useScreenshot({
     imageType: fieldValue.imageType,
-    title: currentAgentTitle,
+    title: currentAgentTitle ?? undefined,
   });
   const { loading: copyLoading, onCopy } = useImgToClipboard();
-  const settings: FormItemProps[] = [
-    {
-      children: <Switch />,
-      label: t('shareModal.withSystemRole'),
-      layout: 'horizontal',
-      minWidth: undefined,
-      name: 'withSystemRole',
-      valuePropName: 'checked',
-    },
-    {
-      children: <Switch />,
-      label: t('shareModal.withBackground'),
-      layout: 'horizontal',
-      minWidth: undefined,
-      name: 'withBackground',
-      valuePropName: 'checked',
-    },
-    {
-      children: <Switch />,
-      label: t('shareModal.withFooter'),
-      layout: 'horizontal',
-      minWidth: undefined,
-      name: 'withFooter',
-      valuePropName: 'checked',
-    },
-    {
-      children: <Segmented options={imageTypeOptions} />,
-      label: t('shareModal.imageType'),
-      layout: 'horizontal',
-      minWidth: undefined,
-      name: 'imageType',
-    },
-  ];
 
-  const isMobile = useIsMobile();
+  const update = <K extends keyof FieldType>(key: K, value: FieldType[K]) =>
+    setFieldValue((prev) => ({ ...prev, [key]: value }));
 
-  const button = (
-    <>
-      <Button
-        block
-        icon={CopyIcon}
-        loading={copyLoading}
-        onClick={() => onCopy()}
-        size={isMobile ? undefined : 'large'}
-        type={'primary'}
-      >
-        {t('copy', { ns: 'common' })}
-      </Button>
-      <Button block loading={loading} onClick={onDownload} size={isMobile ? undefined : 'large'}>
-        {t('shareModal.download')}
-      </Button>
-    </>
-  );
+  const imageTypeLabel = imageTypeOptions.find((o) => o.key === fieldValue.imageType)?.label;
 
   return (
-    <>
-      <Flexbox className={styles.body} gap={16} horizontal={!isMobile}>
-        <Preview title={title} {...fieldValue} />
-        <Flexbox className={styles.sidebar} gap={12}>
-          <Form
-            initialValues={DEFAULT_FIELD_VALUE}
-            items={settings}
-            itemsType={'flat'}
-            onValuesChange={(_, v) => setFieldValue(v)}
-            {...FORM_STYLE}
-          />
-          {!isMobile && button}
-        </Flexbox>
-      </Flexbox>
-      {isMobile && (
-        <Flexbox className={styles.footer} gap={8} horizontal>
-          {button}
-        </Flexbox>
+    <ExportLayout
+      actions={
+        <>
+          <Button icon={CopyIcon} loading={copyLoading} onClick={() => onCopy()}>
+            {t('shareModal.actions.copyImage')}
+          </Button>
+          <Button icon={DownloadIcon} loading={loading} type={'primary'} onClick={onDownload}>
+            {t('shareModal.actions.download')}
+          </Button>
+        </>
+      }
+      meta={[t('shareModal.meta.messages', { count: displayMessages.length }), imageTypeLabel].join(
+        ' · ',
       )}
-    </>
+      toolbar={
+        <>
+          <SelectChip
+            label={t('shareModal.options.width')}
+            value={fieldValue.widthMode}
+            options={[
+              { label: t('shareModal.widthMode.wide'), value: WidthMode.Wide },
+              { label: t('shareModal.widthMode.narrow'), value: WidthMode.Narrow },
+            ]}
+            onChange={(value) => update('widthMode', value)}
+          />
+          <SelectChip
+            label={t('shareModal.options.fileType')}
+            value={fieldValue.imageType}
+            options={imageTypeOptions.map((o) => ({
+              label: String(o.label),
+              value: o.key as ImageType,
+            }))}
+            onChange={(value) => update('imageType', value)}
+          />
+          <ToolbarDivider />
+          <ToggleChip
+            checked={fieldValue.withSystemRole}
+            label={t('shareModal.options.agentProfile')}
+            onChange={(checked) => update('withSystemRole', checked)}
+          />
+          <ToggleChip
+            checked={fieldValue.withFooter}
+            label={t('shareModal.options.footer')}
+            onChange={(checked) => update('withFooter', checked)}
+          />
+        </>
+      }
+    >
+      <Preview context={context} messages={dbMessages} title={title} {...fieldValue} />
+    </ExportLayout>
   );
 });
 

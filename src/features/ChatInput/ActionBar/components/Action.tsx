@@ -1,22 +1,26 @@
 'use client';
 
-import { ActionIcon, type ActionIconProps } from '@lobehub/ui';
-import { isUndefined } from 'lodash-es';
+import { ActionIcon, type ActionIconProps, type PopoverTrigger } from '@lobehub/ui';
+import { isUndefined } from 'es-toolkit/compat';
 import { memo } from 'react';
 import useMergeState from 'use-merge-value';
 
+import { usePermission } from '@/hooks/usePermission';
 import { useServerConfigStore } from '@/store/serverConfig';
 
-import ActionDropdown, { ActionDropdownProps } from './ActionDropdown';
-import ActionPopover, { ActionPopoverProps } from './ActionPopover';
+import { useActionBarContext } from '../context';
+import type { ActionDropdownProps } from './ActionDropdown';
+import ActionDropdown from './ActionDropdown';
+import type { ActionPopoverProps } from './ActionPopover';
+import ActionPopover from './ActionPopover';
 
-interface ActionProps extends Omit<ActionIconProps, 'popover'> {
-  dropdown?: ActionDropdownProps;
+export interface ActionProps extends Omit<ActionIconProps, 'popover'> {
+  dropdown?: Omit<ActionDropdownProps, 'children'>;
   onOpenChange?: (open: boolean) => void;
   open?: boolean;
   popover?: ActionPopoverProps;
   showTooltip?: boolean;
-  trigger?: ActionDropdownProps['trigger'];
+  trigger?: PopoverTrigger;
 }
 
 const Action = memo<ActionProps>(
@@ -31,6 +35,8 @@ const Action = memo<ActionProps>(
     onOpenChange,
     trigger,
     disabled,
+    onClick,
+    size,
     ...rest
   }) => {
     const [show, setShow] = useMergeState(false, {
@@ -38,33 +44,54 @@ const Action = memo<ActionProps>(
       value: open,
     });
     const mobile = useServerConfigStore((s) => s.isMobile);
+    const { actionSize, dropdownPlacement } = useActionBarContext();
+    const { allowed: canUseChatInputAction, reason } = usePermission('create_content');
+    const blocked = disabled || !canUseChatInputAction;
+    const tooltipTitle = canUseChatInputAction ? title : reason;
     const iconNode = (
       <ActionIcon
-        disabled={disabled}
+        disabled={blocked}
         icon={icon}
         loading={loading}
-        onClick={() => setShow(true)}
         title={
-          isUndefined(showTooltip) ? (mobile ? undefined : title) : showTooltip ? title : undefined
+          isUndefined(showTooltip)
+            ? mobile
+              ? undefined
+              : tooltipTitle
+            : showTooltip
+              ? tooltipTitle
+              : undefined
         }
         tooltipProps={{
           placement: 'bottom',
         }}
+        onClick={(e) => {
+          if (blocked || loading) return;
+          if (onClick) return onClick(e);
+          setShow(true);
+        }}
         {...rest}
+        size={
+          actionSize ??
+          size ?? {
+            blockSize: 32,
+            size: 18,
+          }
+        }
       />
     );
 
-    if (disabled) return iconNode;
+    if (blocked) return iconNode;
 
     if (dropdown)
       return (
         <ActionDropdown
-          onOpenChange={setShow}
           open={show}
           trigger={trigger}
+          onOpenChange={setShow}
           {...dropdown}
           minWidth={mobile ? '100%' : dropdown.minWidth}
-          placement={mobile ? 'top' : dropdown.placement}
+          placement={mobile ? 'top' : (dropdownPlacement ?? dropdown.placement)}
         >
           {iconNode}
         </ActionDropdown>
@@ -72,12 +99,13 @@ const Action = memo<ActionProps>(
     if (popover)
       return (
         <ActionPopover
-          onOpenChange={setShow}
+          loading={loading}
           open={show}
           trigger={trigger}
+          onOpenChange={setShow}
           {...popover}
           minWidth={mobile ? '100%' : popover.minWidth}
-          placement={mobile ? 'top' : popover.placement}
+          placement={mobile ? 'top' : (dropdownPlacement ?? popover.placement)}
         >
           {iconNode}
         </ActionPopover>

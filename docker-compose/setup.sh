@@ -25,7 +25,7 @@ fi
 
 # Arg: --url
 # Determine the source URL to download files
-SOURCE_URL="https://raw.githubusercontent.com/lobehub/lobe-chat/main"
+SOURCE_URL="https://raw.githubusercontent.com/lobehub/lobehub/main"
 
 # Arg: --host
 # Determine the server host
@@ -183,20 +183,74 @@ show_message() {
         tips_already_installed)
             case $LANGUAGE in
                 zh_CN)
-                    echo "检测到您已经运行过 LobeChat Database，本安装程序只能完成初始化配置，并不能重复安装。如果你需要重新安装，请删除 data 和 s3_data 文件夹。"
+                    echo "检测到您已经运行过 LobeHub，本安装程序只能完成初始化配置，并不能重复安装。如果你需要重新安装，请删除 data 和 s3_data 文件夹。"
                 ;;
                 *)
-                    echo "It is detected that you have run LobeChat Database. This installation program can only complete the initialization configuration and cannot be reinstalled. If you need to reinstall, please delete the data and s3_data folders."
+                    echo "It is detected that you have run LobeHub. This installation program can only complete the initialization configuration and cannot be reinstalled. If you need to reinstall, please delete the data and s3_data folders."
                 ;;
             esac
         ;;
         tips_run_command)
             case $LANGUAGE in
                 zh_CN)
-                    echo "您已经完成了所有配置。请运行以下命令启动LobeChat："
+                    echo "您已经完成了所有配置。请运行以下命令启动 LobeHub 尝试启动："
                 ;;
                 *)
-                    echo "You have completed all configurations. Please run this command to start LobeChat:"
+                    echo "You have completed all configurations. Please run this command to start LobeHub:"
+                ;;
+            esac
+        ;;
+        tips_if_want_searxng_logs)
+            case $LANGUAGE in
+                zh_CN)
+                    echo "在上述命令中已屏蔽 SearXNG 的日志。如果你想查看 SearXNG 的日志，可以去除选项： --no-attach searxng 或运行以下命令："
+                ;;
+                *)
+                    echo "In the above command, the logs of SearXNG are blocked by default. If you want to view the logs of SearXNG, you can remove the option: --no-attach searxng or run the following command:"
+                ;;
+            esac
+        ;;
+        tips_if_run_normally)
+            case $LANGUAGE in
+                zh_CN)
+                    echo "如果一切运行正常，你可以使用以下指令在 daemon 模式下启动 LobeHub:"
+                ;;
+                *)
+                    echo "If everything runs normally, you can use the following command to start LobeHub in daemon mode:"
+                ;;
+            esac
+        ;;
+        tips_generating_gateway_secrets)
+            case $LANGUAGE in
+                zh_CN)
+                    echo "正在生成 JWKS_KEY 与网关 Token（本机没有 Node.js 时会借助 lobehub/lobehub 镜像生成）..."
+                ;;
+                *)
+                    echo "Generating JWKS_KEY and the gateway token (uses the lobehub/lobehub image when Node.js is not installed)..."
+                ;;
+            esac
+        ;;
+        tips_generate_jwks_failed)
+            case $LANGUAGE in
+                zh_CN)
+                    echo "无法生成 JWKS_KEY，请前往 https://lobehub.com/zh/docs/self-hosting/environment-variables/auth#jwks_key 生成后替换 .env 中的值。"
+                ;;
+                *)
+                    echo "Failed to generate JWKS_KEY. Please generate one at https://lobehub.com/docs/self-hosting/environment-variables/auth#jwks_key and replace the value in .env."
+                ;;
+            esac
+        ;;
+        tips_disable_registration)
+            case $LANGUAGE in
+                zh_CN)
+                    echo "如需限制用户注册，可在 .env 中配置："
+                    echo "  - 使用 SSO 登录时，设置 AUTH_DISABLE_EMAIL_PASSWORD=1 可禁用邮箱密码注册"
+                    echo "  - 使用邮箱密码登录时，设置 AUTH_ALLOWED_EMAILS=user1@example.com,user2@example.com 可限制允许登录的邮箱"
+                ;;
+                *)
+                    echo "To restrict user registration, configure in .env:"
+                    echo "  - For SSO login: set AUTH_DISABLE_EMAIL_PASSWORD=1 to disable email/password registration"
+                    echo "  - For email/password login: set AUTH_ALLOWED_EMAILS=user1@example.com,user2@example.com to allow specific emails"
                 ;;
             esac
         ;;
@@ -233,10 +287,10 @@ show_message() {
         tips_allow_ports)
             case $LANGUAGE in
                 zh_CN)
-                    echo "请确保服务器以下端口未被占用且能被访问：3210, 9000, 9001, 8000"
+                    echo "请确保服务器以下端口未被占用且能被访问：3210, 9000, 9001, 8787, 8788"
                 ;;
                 *)
-                    echo "Please make sure the following ports on the server are not occupied and can be accessed: 3210, 9000, 9001, 8000"
+                    echo "Please make sure the following ports on the server are not occupied and can be accessed: 3210, 9000, 9001, 8787, 8788"
                 ;;
             esac
         ;;
@@ -285,12 +339,10 @@ show_message() {
         tips_init_database_failed)
             case $LANGUAGE in
                 zh_CN)
-                    echo "无法初始化数据库，为了避免你的数据重复初始化，请在首次成功启动时运行以下指令清空 Casdoor 初始配置文件："
-                    echo "echo '{}' > init_data.json"
+                    echo "无法初始化数据库"
                 ;;
                 *)
-                    echo "Failed to initialize the database. To avoid your data being initialized repeatedly, run the following command to unmount the initial configuration file of Casdoor when you first start successfully:"
-                    echo "echo '{}' > init_data.json"
+                    echo "Failed to initialize the database."
                 ;;
             esac
         ;;
@@ -308,7 +360,7 @@ show_message() {
             case $LANGUAGE in
                 zh_CN)
                     echo "请选择部署模式："
-                    echo "(0) 域名模式（访问时无需指明端口），需要使用反向代理服务 LobeChat, MinIO, Casdoor ，并分别分配一个域名；"
+                    echo "(0) 域名模式（访问时无需指明端口），需要使用反向代理服务 LobeHub, RustFS，并分别分配一个域名；"
                     echo "(1) 端口模式（访问时需要指明端口，如使用IP访问，或域名+端口访问），需要放开指定端口；"
                     echo "(2) 本地模式（仅供本地测试使用）"
                     echo "如果你对这些内容疑惑，可以先选择使用本地模式进行部署，稍后根据文档指引再进行修改。"
@@ -316,7 +368,7 @@ show_message() {
                 ;;
                 *)
                     echo "Please select the deployment mode:"
-                    echo "(0) Domain mode (no need to specify the port when accessing), you need to use the reverse proxy service LobeChat, MinIO, Casdoor, and assign a domain name respectively;"
+                    echo "(0) Domain mode (no need to specify the port when accessing), you need to use the reverse proxy service LobeHub, RustFS, and assign a domain name respectively;"
                     echo "(1) Port mode (need to specify the port when accessing, such as using IP access, or domain name + port access), you need to open the specified port;"
                     echo "(2) Local mode (for local testing only)"
                     echo "If you are confused about these contents, you can choose to deploy in local mode first, and then modify according to the document guide later."
@@ -368,8 +420,13 @@ show_message() {
 }
 
 # Function to download files
+# curl is preinstalled on macOS and already needed to fetch this script; wget is the fallback
 download_file() {
-    wget --show-progress "$1" -O "$2"
+    if command -v curl &> /dev/null ; then
+        curl -fsSL "$1" -o "$2"
+    else
+        wget "$1" -O "$2"
+    fi
     # If run failed, exit
     if [ $? -ne 0 ]; then
         show_message "tips_download_failed" "$2"
@@ -377,32 +434,48 @@ download_file() {
     fi
 }
 
+# Detect the primary IPv4 address of this machine
+# `hostname -I` only exists on Linux; macOS falls back to the default route's interface
+detect_host_ip() {
+    local ip=""
+    ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    if [ -z "$ip" ] && command -v ip &> /dev/null ; then
+        ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit }}')
+    fi
+    if [ -z "$ip" ] && command -v ipconfig &> /dev/null ; then
+        ip=$(ipconfig getifaddr "$(route -n get default 2>/dev/null | awk '/interface:/ {print $2}')" 2>/dev/null)
+    fi
+    echo "$ip"
+}
+
 print_centered() {
-    # Define colors
-    declare -A colors
-    colors=(
-        [black]="\e[30m"
-        [red]="\e[31m"
-        [green]="\e[32m"
-        [yellow]="\e[33m"
-        [blue]="\e[34m"
-        [magenta]="\e[35m"
-        [cyan]="\e[36m"
-        [white]="\e[37m"
-        [reset]="\e[0m"
-    )
     local text="$1"                                   # Get input texts
     local color="${2:-reset}"                         # Get color, default to reset
     local term_width=$(tput cols)                     # Get terminal width
     local text_length=${#text}                        # Get text length
     local padding=$(((term_width - text_length) / 2)) # Get padding
-    # Check if the color is valid
-    if [[ -z "${colors[$color]}" ]]; then
-        echo "Invalid color specified. Available colors: ${!colors[@]}"
-        return 1
-    fi
+
+    # Get color code (compatible with bash 3.x)
+    local color_code=""
+    local reset_code="\e[0m"
+    case "$color" in
+        black)   color_code="\e[30m" ;;
+        red)     color_code="\e[31m" ;;
+        green)   color_code="\e[32m" ;;
+        yellow)  color_code="\e[33m" ;;
+        blue)    color_code="\e[34m" ;;
+        magenta) color_code="\e[35m" ;;
+        cyan)    color_code="\e[36m" ;;
+        white)   color_code="\e[37m" ;;
+        reset)   color_code="\e[0m" ;;
+        *)
+            echo "Invalid color specified. Available colors: black red green yellow blue magenta cyan white reset"
+            return 1
+        ;;
+    esac
+
     # Print the text with padding
-    printf "%*s${colors[$color]}%s${colors[reset]}\n" $padding "" "$text"
+    printf "%*s${color_code}%s${reset_code}\n" $padding "" "$text"
 }
 
 # Usage:
@@ -439,22 +512,21 @@ ask() {
 # == Variables ==
 # ===============
 # File list
-SUB_DIR="docker-compose/local"
+SUB_DIR="docker-compose/deploy"
 FILES=(
     "$SUB_DIR/docker-compose.yml"
-    "$SUB_DIR/init_data.json"
     "$SUB_DIR/searxng-settings.yml"
+    "$SUB_DIR/bucket.config.json"
+    "$SUB_DIR/elasticsearch/Dockerfile"
 )
 ENV_EXAMPLES=(
     "$SUB_DIR/.env.zh-CN.example"
     "$SUB_DIR/.env.example"
 )
 # Default values
-CASDOOR_PASSWORD="123"
-CASDOOR_SECRET="CASDOOR_SECRET"
-MINIO_ROOT_PASSWORD="YOUR_MINIO_PASSWORD"
-CASDOOR_HOST="localhost:8000"
-MINIO_HOST="localhost:9000"
+RUSTFS_SECRET_KEY="YOUR_RUSTFS_PASSWORD"
+RUSTFS_HOST="localhost:9000"
+GATEWAY_HOST="localhost:8787"
 PROTOCOL="http"
 
 # If no language is specified, ask the user to choose
@@ -477,15 +549,17 @@ fi
 
 section_download_files(){
     # Download files asynchronously
-    if ! command -v wget &> /dev/null ; then
-        echo "wget" $(show_message "tips_no_executable")
+    if ! command -v curl &> /dev/null && ! command -v wget &> /dev/null ; then
+        echo "curl / wget" $(show_message "tips_no_executable")
         exit 1
     fi
     
     download_file "$SOURCE_URL/${FILES[0]}" "docker-compose.yml"
-    download_file "$SOURCE_URL/${FILES[1]}" "init_data.json"
-    download_file "$SOURCE_URL/${FILES[2]}" "searxng-settings.yml"
-    
+    download_file "$SOURCE_URL/${FILES[1]}" "searxng-settings.yml"
+    download_file "$SOURCE_URL/${FILES[2]}" "bucket.config.json"
+    # Build context of the optional Elasticsearch service (only built when its profile is enabled)
+    mkdir -p elasticsearch
+    download_file "$SOURCE_URL/${FILES[3]}" "elasticsearch/Dockerfile"
     # Download .env.example with the specified language
     if [ "$LANGUAGE" = "zh_CN" ]; then
         download_file "$SOURCE_URL/${ENV_EXAMPLES[0]}" ".env"
@@ -518,8 +592,11 @@ section_configurate_host() {
         ask "(y/n)" "y"
         if [[ "$ask_result" == "y" ]]; then
             PROTOCOL="https"
-            # Replace all http with https
-            sed "${SED_INPLACE_ARGS[@]}" "s#http://#https://#" .env
+            # Replace http with https on variable assignments only (commented ones
+            # included), so explanatory comments keep their wording, and skip the
+            # in-network Elasticsearch and device gateway endpoints, which are plain
+            # HTTP by design.
+            sed "${SED_INPLACE_ARGS[@]}" '/^#\{0,1\} \{0,1\}[A-Za-z0-9_]*=/{/ES_URL=/!{/DEVICE_GATEWAY_URL=/!s|http://|https://|;};}' .env
         fi
     fi
     
@@ -531,7 +608,7 @@ section_configurate_host() {
     
     # If user not specify host, try to get the server ip
     if [ -z "$HOST" ]; then
-        HOST=$(hostname -I | awk '{print $1}')
+        HOST=$(detect_host_ip)
         # If the host is a private ip and the deploy mode is port mode
         if [[ "$DEPLOY_MODE" == "1" ]] && ([[ "$HOST" == "192.168."* ]] || [[ "$HOST" == "172."* ]] || [[ "$HOST" == "10."* ]]); then
             echo $(show_message "tips_private_ip_detected")
@@ -542,47 +619,41 @@ section_configurate_host() {
     case $DEPLOY_MODE in
         0)
             DEPLOY_MODE="domain"
-            echo "LobeChat" $(show_message "ask_domain" "example.com")
+            echo "LobeHub" $(show_message "ask_domain" "example.com")
             ask "(example.com)"
             LOBE_HOST="$ask_result"
-            # If user use domain mode, ask for the domain of Minio and Casdoor
-            echo "Minio S3 API" $(show_message "ask_domain" "minio.example.com")
-            ask "(minio.example.com)"
-            MINIO_HOST="$ask_result"
-            echo "Casdoor API" $(show_message "ask_domain" "auth.example.com")
-            ask "(auth.example.com)"
-            CASDOOR_HOST="$ask_result"
-            # Setup callback url for Casdoor
-            sed "${SED_INPLACE_ARGS[@]}" "s/"example.com"/${LOBE_HOST}/" init_data.json
+            # If user use domain mode, ask for the domain of RustFS
+            echo "RustFS S3 API" $(show_message "ask_domain" "s3.example.com")
+            ask "(s3.example.com)"
+            RUSTFS_HOST="$ask_result"
+            # Gateway Mode streams agent runs to the browser over WebSocket
+            echo "Agent Gateway" $(show_message "ask_domain" "gateway.example.com")
+            ask "(gateway.example.com)"
+            GATEWAY_HOST="$ask_result"
         ;;
         1)
             DEPLOY_MODE="ip"
-            ask $(printf "%s%s" "LobeChat" $(show_message "ask_host")) "$HOST" $(printf "%s" $(show_message "tips_auto_detected"))
+            ask $(printf "%s%s" "LobeHub" $(show_message "ask_host")) "$HOST" $(printf "%s" $(show_message "tips_auto_detected"))
             LOBE_HOST="$ask_result"
             # If user use ip mode, use ask_result as the host
             HOST="$ask_result"
             # If user use ip mode, append the port to the host
             LOBE_HOST="${HOST}:3210"
-            MINIO_HOST="${HOST}:9000"
-            CASDOOR_HOST="${HOST}:8000"
-            # Setup callback url for Casdoor
-            sed "${SED_INPLACE_ARGS[@]}" "s/"localhost:3210"/${LOBE_HOST}/" init_data.json
+            RUSTFS_HOST="${HOST}:9000"
+            GATEWAY_HOST="${HOST}:8787"
         ;;
         *)
             echo "Invalid deploy mode: $ask_result"
             exit 1
         ;;
     esac
-    
+
     # lobe host
     sed "${SED_INPLACE_ARGS[@]}" "s#^APP_URL=.*#APP_URL=$PROTOCOL://$LOBE_HOST#" .env
-    # auth related
-    sed "${SED_INPLACE_ARGS[@]}" "s#^AUTH_URL=.*#AUTH_URL=$PROTOCOL://$LOBE_HOST/api/auth#" .env
-    sed "${SED_INPLACE_ARGS[@]}" "s#^AUTH_CASDOOR_ISSUER=.*#AUTH_CASDOOR_ISSUER=$PROTOCOL://$CASDOOR_HOST#" .env
-    sed "${SED_INPLACE_ARGS[@]}" "s#^origin=.*#origin=$PROTOCOL://$CASDOOR_HOST#" .env
     # s3 related
-    sed "${SED_INPLACE_ARGS[@]}" "s#^S3_PUBLIC_DOMAIN=.*#S3_PUBLIC_DOMAIN=$PROTOCOL://$MINIO_HOST#" .env
-    sed "${SED_INPLACE_ARGS[@]}" "s#^S3_ENDPOINT=.*#S3_ENDPOINT=$PROTOCOL://$MINIO_HOST#" .env
+    sed "${SED_INPLACE_ARGS[@]}" "s#^S3_ENDPOINT=.*#S3_ENDPOINT=$PROTOCOL://$RUSTFS_HOST#" .env
+    # agent gateway, opened by the browser
+    sed "${SED_INPLACE_ARGS[@]}" "s#^AGENT_GATEWAY_URL=.*#AGENT_GATEWAY_URL=$PROTOCOL://$GATEWAY_HOST#" .env
     
 
     # Check if env modified success
@@ -634,47 +705,38 @@ section_regenerate_secrets() {
         exit 1
     fi
     echo $(show_message "security_secrect_regenerate")
-    
-    # Generate CASDOOR_SECRET
-    CASDOOR_SECRET=$(generate_key 32)
+
+    # Generate RUSTFS S3 User Password
+    RUSTFS_SECRET_KEY=$(generate_key 8)
     if [ $? -ne 0 ]; then
-        echo $(show_message "security_secrect_regenerate_failed") "CASDOOR_SECRET"
+        echo $(show_message "security_secrect_regenerate_failed") "RUSTFS_SECRET_KEY"
+        RUSTFS_SECRET_KEY="YOUR_RUSTFS_PASSWORD"
     else
-        # Search and replace the value of CASDOOR_SECRET in .env
-        sed "${SED_INPLACE_ARGS[@]}" "s#^AUTH_CASDOOR_SECRET=.*#AUTH_CASDOOR_SECRET=${CASDOOR_SECRET}#" .env
+        sed "${SED_INPLACE_ARGS[@]}" "s#^RUSTFS_SECRET_KEY=.*#RUSTFS_SECRET_KEY=${RUSTFS_SECRET_KEY}#" .env
         if [ $? -ne 0 ]; then
-            echo $(show_message "security_secrect_regenerate_failed") "AUTH_CASDOOR_SECRET in \`.env\`"
-        fi
-        # replace `clientSecrect` in init_data.json
-        sed "${SED_INPLACE_ARGS[@]}" "s#dbf205949d704de81b0b5b3603174e23fbecc354#${CASDOOR_SECRET}#" init_data.json
-        if [ $? -ne 0 ]; then
-            echo $(show_message "security_secrect_regenerate_failed") "AUTH_CASDOOR_SECRET in \`init_data.json\`"
+            echo $(show_message "security_secrect_regenerate_failed") "RUSTFS_SECRET_KEY in \`.env\`"
         fi
     fi
-    
-    # Generate Casdoor User
-    CASDOOR_USER="admin"
-    CASDOOR_PASSWORD=$(generate_key 10)
+
+    # Generate KEY_VAULTS_SECRET (base64 encoded 32 bytes)
+    KEY_VAULTS_SECRET=$(openssl rand -base64 32)
     if [ $? -ne 0 ]; then
-        echo $(show_message "security_secrect_regenerate_failed") "CASDOOR_PASSWORD"
-        CASDOOR_PASSWORD="123"
+        echo $(show_message "security_secrect_regenerate_failed") "KEY_VAULTS_SECRET"
     else
-        # replace `password` in init_data.json
-        sed "${SED_INPLACE_ARGS[@]}" "s/"123"/${CASDOOR_PASSWORD}/" init_data.json
+        sed "${SED_INPLACE_ARGS[@]}" "s#^KEY_VAULTS_SECRET=.*#KEY_VAULTS_SECRET=${KEY_VAULTS_SECRET}#" .env
         if [ $? -ne 0 ]; then
-            echo $(show_message "security_secrect_regenerate_failed") "CASDOOR_PASSWORD in \`init_data.json\`"
+            echo $(show_message "security_secrect_regenerate_failed") "KEY_VAULTS_SECRET in \`.env\`"
         fi
     fi
-    # Generate Minio S3 User Password
-    MINIO_ROOT_PASSWORD=$(generate_key 8)
+
+    # Generate AUTH_SECRET (base64 encoded 32 bytes)
+    AUTH_SECRET=$(openssl rand -base64 32)
     if [ $? -ne 0 ]; then
-        echo $(show_message "security_secrect_regenerate_failed") "MINIO_ROOT_PASSWORD"
-        MINIO_ROOT_PASSWORD="YOUR_MINIO_PASSWORD"
+        echo $(show_message "security_secrect_regenerate_failed") "AUTH_SECRET"
     else
-        # Search and replace the value of S3_SECRET_ACCESS_KEY in .env
-        sed "${SED_INPLACE_ARGS[@]}" "s#^MINIO_ROOT_PASSWORD=.*#MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}#" .env
+        sed "${SED_INPLACE_ARGS[@]}" "s#^AUTH_SECRET=.*#AUTH_SECRET=${AUTH_SECRET}#" .env
         if [ $? -ne 0 ]; then
-            echo $(show_message "security_secrect_regenerate_failed") "MINIO_ROOT_PASSWORD in \`.env\`"
+            echo $(show_message "security_secrect_regenerate_failed") "AUTH_SECRET in \`.env\`"
         fi
     fi
 }
@@ -684,6 +746,51 @@ ask "(y/n)" "y"
 if [[ "$ask_result" == "y" ]]; then
     section_regenerate_secrets
 fi
+
+# ================================
+# === Generate Gateway Secrets ===
+# ================================
+# The .env template only carries placeholders for these, so they are generated
+# regardless of the answer above. JWKS_KEY must be unique per deployment: the
+# gateway trusts every browser session JWT signed with it.
+generate_jwks_key_pair() {
+    # Prints the private key set, then the same key without its private fields for the gateway
+    local script='const c=require("crypto");const {privateKey,publicKey}=c.generateKeyPairSync("rsa",{modulusLength:2048});const meta={alg:"RS256",kid:c.randomBytes(8).toString("hex"),use:"sig"};console.log(JSON.stringify({keys:[{...privateKey.export({format:"jwk"}),...meta}]}));console.log(JSON.stringify({keys:[{...publicKey.export({format:"jwk"}),...meta}]}))'
+    local keys=""
+    if command -v node &> /dev/null ; then
+        keys=$(node -e "$script" 2>/dev/null)
+    fi
+    # Fall back to the Node.js runtime inside the LobeHub image
+    if [[ "$keys" != '{"keys":'* ]] && command -v docker &> /dev/null ; then
+        keys=$(docker run --rm --entrypoint /bin/node lobehub/lobehub -e "$script" 2>/dev/null)
+    fi
+    if [[ "$keys" != '{"keys":'*$'\n''{"keys":'* ]]; then
+        return 1
+    fi
+    echo "$keys"
+}
+
+section_generate_gateway_secrets() {
+    echo $(show_message "tips_generating_gateway_secrets")
+
+    GATEWAY_SERVICE_TOKEN=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    if [ -z "$GATEWAY_SERVICE_TOKEN" ]; then
+        echo $(show_message "security_secrect_regenerate_failed") "GATEWAY_SERVICE_TOKEN"
+    else
+        sed "${SED_INPLACE_ARGS[@]}" "s#^GATEWAY_SERVICE_TOKEN=.*#GATEWAY_SERVICE_TOKEN=${GATEWAY_SERVICE_TOKEN}#" .env
+    fi
+
+    JWKS_KEYS=$(generate_jwks_key_pair)
+    if [ $? -ne 0 ]; then
+        echo $(show_message "tips_generate_jwks_failed")
+    else
+        JWKS_KEY=${JWKS_KEYS%%$'\n'*}
+        JWKS_PUBLIC_KEY=${JWKS_KEYS#*$'\n'}
+        sed "${SED_INPLACE_ARGS[@]}" "s#^JWKS_KEY=.*#JWKS_KEY=${JWKS_KEY}#" .env
+        sed "${SED_INPLACE_ARGS[@]}" "s#^JWKS_PUBLIC_KEY=.*#JWKS_PUBLIC_KEY=${JWKS_PUBLIC_KEY}#" .env
+    fi
+}
+section_generate_gateway_secrets
 
 section_init_database() {
     if ! command -v docker &> /dev/null ; then
@@ -705,13 +812,10 @@ section_init_database() {
     fi
 
     docker compose pull
-    docker compose up --detach postgresql casdoor
+    docker compose up --detach postgresql
     # hopefully enough time for even the slower systems
 	sleep 15
 	docker compose stop
-
-    # Init finished, remove init mount
-    echo '{}' > init_data.json
 }
 
 show_message "ask_init_database"
@@ -729,23 +833,28 @@ fi
 section_display_configurated_report() {
     # Display configuration reports
     echo $(show_message "security_secrect_regenerate_report")
-    
-    echo -e "LobeChat: \n  - URL: $PROTOCOL://$LOBE_HOST \n  - Username: user \n  - Password: ${CASDOOR_PASSWORD} "
-    echo -e "Casdoor: \n  - URL: $PROTOCOL://$CASDOOR_HOST \n  - Username: admin \n  - Password: ${CASDOOR_PASSWORD}\n"
-    echo -e "Minio: \n  - URL: $PROTOCOL://$MINIO_HOST \n  - Username: admin\n  - Password: ${MINIO_ROOT_PASSWORD}\n"
-    
+
+    echo -e "LobeHub: \n  - URL: $PROTOCOL://$LOBE_HOST"
+    echo -e "RustFS: \n  - URL: $PROTOCOL://$RUSTFS_HOST \n  - Username: admin\n  - Password: ${RUSTFS_SECRET_KEY}"
+    echo -e "Agent Gateway: \n  - URL: $PROTOCOL://$GATEWAY_HOST\n"
+
     # if user run in domain mode, diplay reverse proxy configuration
     if [[ "$DEPLOY_MODE" == "domain" ]]; then
         echo $(show_message "tips_add_reverse_proxy")
         printf "\n%s\t->\t%s\n" "$LOBE_HOST" "127.0.0.1:3210"
-        printf "%s\t->\t%s\n" "$CASDOOR_HOST" "127.0.0.1:8000"
-        printf "%s\t->\t%s\n" "$MINIO_HOST" "127.0.0.1:9000"
+        printf "%s\t->\t%s\n" "$RUSTFS_HOST" "127.0.0.1:9000"
+        printf "%s\t->\t%s\n" "$GATEWAY_HOST" "127.0.0.1:8787 (WebSocket)"
     fi
 
     # Display final message
 
     printf "\n%s\n\n" "$(show_message "tips_run_command")"
-    print_centered "docker compose up -d" "green"
+    print_centered "docker compose up --no-attach searxng" "green"
+    printf "\n%s\n" "$(show_message "tips_if_run_normally")"
+    printf "\n%s\n\n" "$(show_message "tips_disable_registration")"
+    print_centered "docker compose up -d --no-attach searxng" "green"
+    printf "\n%s\n" "$(show_message "tips_if_want_searxng_logs")"
+    print_centered "docker compose logs -f searxng" "white"
     printf "\n%s\n" "$(show_message "tips_allow_ports")"
     printf "\n%s" "$(show_message "tips_show_documentation")"
     printf "%s\n" $(show_message "tips_show_documentation_url")

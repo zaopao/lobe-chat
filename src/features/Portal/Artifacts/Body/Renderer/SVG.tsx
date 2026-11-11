@@ -1,24 +1,23 @@
-import { Button, Dropdown, Tooltip } from '@lobehub/ui';
-import { App, Space } from 'antd';
-import { css, cx } from 'antd-style';
+import { BRANDING_NAME } from '@lobechat/business-const';
+import { copyImageToClipboard } from '@lobechat/utils/client';
+import { Button, css, cx, DropdownMenu, Flexbox, toast, Tooltip } from '@lobehub/ui';
 import { CopyIcon, DownloadIcon } from 'lucide-react';
-import { domToPng } from 'modern-screenshot';
+import { useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Center, Flexbox } from 'react-layout-kit';
 
-import { BRANDING_NAME } from '@/const/branding';
 import { useChatStore } from '@/store/chat';
 import { chatPortalSelectors } from '@/store/chat/selectors';
-import { copyImageToClipboard } from '@/utils/clipboard';
 
-const svgContainer = css`
+import { getSvgFrameProps, rasterizeSvg } from './svgDocument';
+
+const svgFrame = css`
   width: 100%;
   height: 100%;
+  border: none;
 
-  > svg {
-    width: 100%;
-    height: 100%;
-  }
+  /* Matches the srcdoc's light scheme so prefers-color-scheme inside the SVG resolves to light,
+     consistent with the white preview canvas, even when the app runs in dark mode. */
+  color-scheme: light;
 `;
 
 const actions = css`
@@ -27,22 +26,23 @@ const actions = css`
   inset-inline-end: 8px;
 `;
 
-const DOM_ID = 'artfact-svg';
 interface SVGRendererProps {
   content: string;
 }
 
 const SVGRenderer = ({ content }: SVGRendererProps) => {
   const { t } = useTranslation('portal');
-  const { message } = App.useApp();
 
-  const generatePng = async () => {
-    return domToPng(document.querySelector(`#${DOM_ID}`) as HTMLDivElement, {
-      features: {
-        // 不启用移除控制符，否则会导致 safari emoji 报错
-        removeControlCharacter: false,
-      },
-      scale: 2,
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const frameProps = useMemo(() => getSvgFrameProps(content), [content]);
+
+  // Rasterize at the preview's on-screen size so the PNG matches what the user sees
+  const generatePng = () => {
+    const frame = frameRef.current;
+
+    return rasterizeSvg(content, {
+      height: frame?.clientHeight || 600,
+      width: frame?.clientWidth || 800,
     });
   };
 
@@ -71,41 +71,37 @@ const SVGRenderer = ({ content }: SVGRendererProps) => {
       height={'100%'}
       style={{ position: 'relative' }}
     >
-      <Center
-        className={cx(svgContainer)}
-        dangerouslySetInnerHTML={{ __html: content }}
-        id={DOM_ID}
-      />
-      <Flexbox className={cx(actions)}>
-        <Space.Compact>
-          <Dropdown
-            menu={{
-              items: [
-                { key: 'png', label: t('artifacts.svg.download.png') },
-                { key: 'svg', label: t('artifacts.svg.download.svg') },
-              ],
-              onClick: ({ key }) => {
-                downloadImage(key);
-              },
+      <iframe className={cx(svgFrame)} ref={frameRef} title={'svg-renderer'} {...frameProps} />
+      <Flexbox horizontal className={cx(actions)} gap={4}>
+        <DropdownMenu
+          items={[
+            {
+              key: 'png',
+              label: t('artifacts.svg.download.png'),
+              onClick: () => downloadImage('png'),
+            },
+            {
+              key: 'svg',
+              label: t('artifacts.svg.download.svg'),
+              onClick: () => downloadImage('svg'),
+            },
+          ]}
+        >
+          <Button icon={DownloadIcon} />
+        </DropdownMenu>
+        <Tooltip title={t('artifacts.svg.copyAsImage')}>
+          <Button
+            icon={CopyIcon}
+            onClick={async () => {
+              try {
+                await copyImageToClipboard(await generatePng());
+                toast.success(t('artifacts.svg.copySuccess'));
+              } catch (e) {
+                toast.error(t('artifacts.svg.copyFail', { error: e }));
+              }
             }}
-          >
-            <Button icon={DownloadIcon} />
-          </Dropdown>
-          <Tooltip title={t('artifacts.svg.copyAsImage')}>
-            <Button
-              icon={CopyIcon}
-              onClick={async () => {
-                const dataUrl = await generatePng();
-                try {
-                  await copyImageToClipboard(dataUrl);
-                  message.success(t('artifacts.svg.copySuccess'));
-                } catch (e) {
-                  message.error(t('artifacts.svg.copyFail', { error: e }));
-                }
-              }}
-            />
-          </Tooltip>
-        </Space.Compact>
+          />
+        </Tooltip>
       </Flexbox>
     </Flexbox>
   );

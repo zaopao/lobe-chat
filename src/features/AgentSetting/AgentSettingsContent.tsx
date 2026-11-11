@@ -1,16 +1,15 @@
-import { ReactNode, memo } from 'react';
+import { type ReactNode } from 'react';
+import { memo } from 'react';
 
-import { useStore } from '@/features/AgentSetting/store';
+import { useAgentStore } from '@/store/agent';
+import { agentSelectors } from '@/store/agent/selectors';
 import { ChatSettingsTabs } from '@/store/global/initialState';
-import { featureFlagsSelectors, useServerConfigStore } from '@/store/serverConfig';
+import { useUserStore } from '@/store/user';
+import { labPreferSelectors } from '@/store/user/selectors';
 
-import AgentChat from './AgentChat';
-import AgentMeta from './AgentMeta';
-import AgentModal from './AgentModal';
+import AgentConnectors from './AgentConnectors';
+import AgentGraphRuntime from './AgentGraphRuntime';
 import AgentOpening from './AgentOpening';
-import AgentPlugin from './AgentPlugin';
-import AgentPrompt from './AgentPrompt';
-import AgentTTS from './AgentTTS';
 
 export interface AgentSettingsContentProps {
   loadingSkeleton: ReactNode;
@@ -18,20 +17,16 @@ export interface AgentSettingsContentProps {
 }
 
 const AgentSettingsContent = memo<AgentSettingsContentProps>(({ tab, loadingSkeleton }) => {
-  const loading = useStore((s) => s.loading);
-  const { enablePlugins } = useServerConfigStore(featureFlagsSelectors);
+  const loading = useAgentStore(agentSelectors.isAgentConfigLoading);
+  const enableAgentGraphConfigLab = useUserStore(labPreferSelectors.enableAgentGraphConfig);
 
   if (loading) return loadingSkeleton;
 
   return (
     <>
-      {tab === ChatSettingsTabs.Meta && <AgentMeta />}
-      {tab === ChatSettingsTabs.Prompt && <AgentPrompt />}
       {tab === ChatSettingsTabs.Opening && <AgentOpening />}
-      {tab === ChatSettingsTabs.Chat && <AgentChat />}
-      {tab === ChatSettingsTabs.Modal && <AgentModal />}
-      {tab === ChatSettingsTabs.TTS && <AgentTTS />}
-      {enablePlugins && tab === ChatSettingsTabs.Plugin && <AgentPlugin />}
+      {enableAgentGraphConfigLab && tab === ChatSettingsTabs.Graph && <AgentGraphRuntime />}
+      {tab === ChatSettingsTabs.Connector && <AgentConnectors />}
     </>
   );
 });

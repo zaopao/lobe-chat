@@ -1,20 +1,14 @@
-import { ProgressInfo, UpdateInfo } from '../types';
+import type { ProgressInfo, UpdateChannel, UpdateInfo, UpdaterState } from '../types';
 
-export interface AutoUpdateDispatchEvents {
-  checkUpdate: () => void;
-  downloadUpdate: () => void;
-  installLater: () => void;
-  installNow: () => void;
-  installUpdate: () => void;
-}
-
-export interface AutoUpdateBroadcastEvents {
-  manualUpdateAvailable: (info: UpdateInfo) => void;
-  manualUpdateCheckStart: () => void;
-  manualUpdateNotAvailable: (info: UpdateInfo) => void;
+export interface UpdateBroadcastEvents {
+  coreUpdateApplied: (version: string) => void;
+  coreUpdateDeferred: () => void;
+  reloadConfirmationCancelled: () => void;
+  reloadConfirmationRequested: () => void;
+  updateChannelChanged: (channel: UpdateChannel) => void;
   updateDownloadProgress: (progress: ProgressInfo) => void;
-  updateDownloadStart: () => void;
-  updateDownloaded: (info: UpdateInfo) => void;
   updateError: (message: string) => void;
+  updateReady: (info: UpdateInfo) => void;
+  updaterStateChanged: (state: UpdaterState) => void;
   updateWillInstallLater: () => void;
 }

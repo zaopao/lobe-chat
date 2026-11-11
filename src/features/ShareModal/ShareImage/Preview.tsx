@@ -1,61 +1,128 @@
-import { ModelTag } from '@lobehub/icons';
-import { Avatar, Markdown } from '@lobehub/ui';
-import { ChatHeaderTitle } from '@lobehub/ui/chat';
+import { DEFAULT_INBOX_TITLE } from '@lobechat/const';
+import { agentDisplayName, type ConversationContext, type UIChatMessage } from '@lobechat/types';
+import { cx, Flexbox, Markdown, Text } from '@lobehub/ui';
 import { memo } from 'react';
-import { useTranslation } from 'react-i18next';
-import { Flexbox } from 'react-layout-kit';
 
+import AgentAvatar from '@/components/AgentAvatar';
 import { ProductLogo } from '@/components/Branding';
+import { ModelTag } from '@/components/LobeIcons';
 import PluginTag from '@/features/PluginTag';
+import { filterToolIds } from '@/helpers/toolFilters';
 import { useAgentStore } from '@/store/agent';
-import { agentSelectors } from '@/store/agent/selectors';
-import { useSessionStore } from '@/store/session';
-import { sessionMetaSelectors, sessionSelectors } from '@/store/session/selectors';
+import { agentByIdSelectors, agentSelectors, builtinAgentSelectors } from '@/store/agent/selectors';
 
 import pkg from '../../../../package.json';
-import { useContainerStyles } from '../style';
+import { containerStyles } from '../style';
 import ChatList from './ChatList';
-import { useStyles } from './style';
-import { FieldType } from './type';
+import { styles } from './style';
+import { type FieldType } from './type';
+import { WidthMode } from './type';
 
-const Preview = memo<FieldType & { title?: string }>(
-  ({ title, withSystemRole, withBackground, withFooter }) => {
-    const [model, plugins, systemRole] = useAgentStore((s) => [
-      agentSelectors.currentAgentModel(s),
-      agentSelectors.currentAgentPlugins(s),
-      agentSelectors.currentAgentSystemRole(s),
-    ]);
-    const [isInbox, description, avatar, backgroundColor] = useSessionStore((s) => [
-      sessionSelectors.isInboxSession(s),
-      sessionMetaSelectors.currentAgentDescription(s),
-      sessionMetaSelectors.currentAgentAvatar(s),
-      sessionMetaSelectors.currentAgentBackgroundColor(s),
-    ]);
+interface PreviewProps extends FieldType {
+  context: ConversationContext;
+  headerAgentId?: string | null;
+  messages: UIChatMessage[];
+  previewId?: string;
+  title?: string;
+}
 
-    const { t } = useTranslation('chat');
-    const { styles } = useStyles(withBackground);
-    const { styles: containerStyles } = useContainerStyles();
+const Preview = memo<PreviewProps>(
+  ({
+    context,
+    headerAgentId,
+    messages,
+    previewId = 'preview',
+    title,
+    withPluginInfo,
+    withSystemRole,
+    withBackground,
+    withFooter,
+    widthMode,
+  }) => {
+    const [
+      activeAgentId,
+      currentModel,
+      currentPlugins,
+      systemRole,
+      isInbox,
+      currentTitle,
+      currentAvatar,
+      currentBackgroundColor,
+      headerMeta,
+      headerModel,
+      headerPlugins,
+      isHeaderInbox,
+    ] = useAgentStore((s) => {
+      const resolvedHeaderAgentId =
+        headerAgentId && s.agentMap[headerAgentId] ? headerAgentId : undefined;
 
-    const displayTitle = isInbox ? t('inbox.title') : title;
-    const displayDesc = isInbox ? t('inbox.desc') : description;
+      return [
+        s.activeAgentId,
+        agentSelectors.currentAgentModel(s),
+        agentSelectors.displayableAgentPlugins(s),
+        agentSelectors.currentAgentSystemRole(s),
+        builtinAgentSelectors.isInboxAgent(s),
+        agentSelectors.currentAgentDisplayName(s),
+        agentSelectors.currentAgentAvatar(s),
+        agentSelectors.currentAgentBackgroundColor(s),
+        resolvedHeaderAgentId
+          ? agentSelectors.getAgentMetaById(resolvedHeaderAgentId)(s)
+          : undefined,
+        resolvedHeaderAgentId
+          ? agentByIdSelectors.getAgentModelById(resolvedHeaderAgentId)(s)
+          : undefined,
+        resolvedHeaderAgentId
+          ? filterToolIds(agentByIdSelectors.getAgentPluginsById(resolvedHeaderAgentId)(s))
+          : undefined,
+        resolvedHeaderAgentId
+          ? builtinAgentSelectors.inboxAgentId(s) === resolvedHeaderAgentId
+          : undefined,
+      ];
+    });
+
+    const displayTitle =
+      (isHeaderInbox ?? isInbox)
+        ? DEFAULT_INBOX_TITLE
+        : agentDisplayName(headerMeta) || title || currentTitle;
+    const resolvedAgentId = (headerMeta && headerAgentId) || activeAgentId;
+    const displayAvatar = headerMeta?.avatar || currentAvatar;
+    const displayBackgroundColor = headerMeta?.backgroundColor || currentBackgroundColor;
+    const displayModel = headerModel || currentModel;
+    const displayPlugins = headerPlugins || currentPlugins;
 
     return (
-      <div className={containerStyles.preview}>
-        <div className={withBackground ? styles.background : undefined} id={'preview'}>
-          <Flexbox className={styles.container} gap={16}>
+      <div
+        className={cx(
+          containerStyles.preview,
+          widthMode === WidthMode.Narrow
+            ? containerStyles.previewNarrow
+            : containerStyles.previewWide,
+        )}
+      >
+        <div className={withBackground ? styles.background : undefined} id={previewId}>
+          <Flexbox
+            className={cx(styles.container, withBackground && styles.container_withBackground_true)}
+            gap={16}
+          >
             <div className={styles.header}>
-              <Flexbox align={'flex-start'} gap={12} horizontal>
-                <Avatar avatar={avatar} background={backgroundColor} size={40} title={title} />
-                <ChatHeaderTitle
-                  desc={displayDesc}
-                  tag={
-                    <Flexbox gap={4} horizontal>
-                      <ModelTag model={model} />
-                      {plugins?.length > 0 && <PluginTag plugins={plugins} />}
-                    </Flexbox>
-                  }
-                  title={displayTitle}
+              <Flexbox horizontal align={'center'} gap={12}>
+                <AgentAvatar
+                  agentId={resolvedAgentId}
+                  avatar={displayAvatar}
+                  background={displayBackgroundColor}
+                  name={displayTitle}
+                  size={28}
+                  title={displayTitle ?? undefined}
                 />
+                <Text strong fontSize={16}>
+                  {displayTitle}
+                </Text>
+                <Flexbox horizontal gap={4}>
+                  <ModelTag model={displayModel} />
+                  {withPluginInfo && displayPlugins?.length > 0 && (
+                    <PluginTag plugins={displayPlugins} />
+                  )}
+                </Flexbox>
               </Flexbox>
               {withSystemRole && systemRole && (
                 <div className={styles.role}>
@@ -63,7 +130,7 @@ const Preview = memo<FieldType & { title?: string }>(
                 </div>
               )}
             </div>
-            <ChatList />
+            <ChatList context={context} ids={[]} messages={messages} />
             {withFooter ? (
               <Flexbox align={'center'} className={styles.footer} gap={4}>
                 <ProductLogo type={'combine'} />

@@ -1,30 +1,41 @@
 'use client';
 
-import { Upload } from 'antd';
-import { createStyles } from 'antd-style';
+import { type ErrorShape, type ImportFileUploadState } from '@lobechat/types';
+import { ImportStage } from '@lobechat/types';
+import { Button, Center, createStaticStyles, cx, toast, Upload } from '@lobehub/ui';
 import { ImportIcon } from 'lucide-react';
-import React, { ReactNode, memo, useMemo, useState } from 'react';
+import React, { memo, useCallback, useMemo, useState } from 'react';
+import { type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Center } from 'react-layout-kit';
 
 import DataStyleModal from '@/components/DataStyleModal';
 import { importService } from '@/services/import';
-import { ImportResult, ImportResults } from '@/services/import/_deprecated';
 import { useChatStore } from '@/store/chat';
-import { useSessionStore } from '@/store/session';
-import { ImportPgDataStructure } from '@/types/export';
-import { ConfigFile } from '@/types/exportConfig';
-import { ErrorShape, FileUploadState, ImportStage, OnImportCallbacks } from '@/types/importer';
+import { useHomeStore } from '@/store/home';
+import { type ImportPgDataStructure } from '@/types/export';
 
+import { parseConfigFile } from './config';
 import ImportError from './Error';
 import { FileUploading } from './FileUploading';
 import ImportPreviewModal from './ImportDetail';
 import DataLoading from './Loading';
 import SuccessResult from './SuccessResult';
-import { importConfigFile } from './_deprecated';
-import { parseConfigFile } from './config';
 
-const useStyles = createStyles(({ css }) => ({
+export interface ImportResult {
+  added: number;
+  errors: number;
+  skips: number;
+  updated?: number;
+}
+export interface ImportResults {
+  messages?: ImportResult;
+  sessionGroups?: ImportResult;
+  sessions?: ImportResult;
+  topics?: ImportResult;
+  type?: string;
+}
+
+const styles = createStaticStyles(({ css }) => ({
   children: css`
     &::before {
       content: '';
@@ -45,19 +56,38 @@ interface DataImporterProps {
 
 const DataImporter = memo<DataImporterProps>(({ children, onFinishImport }) => {
   const { t } = useTranslation('common');
-  const { styles } = useStyles();
 
-  const refreshSessions = useSessionStore((s) => s.refreshSessions);
+  const refreshAgentList = useHomeStore((s) => s.refreshAgentList);
   const [refreshMessages, refreshTopics] = useChatStore((s) => [s.refreshMessages, s.refreshTopic]);
 
   const [duration, setDuration] = useState(0);
   const [importState, setImportState] = useState(ImportStage.Start);
 
-  const [fileUploadingState, setUploadingState] = useState<FileUploadState | undefined>();
+  const [fileUploadingState, setUploadingState] = useState<ImportFileUploadState | undefined>();
   const [importError, setImportError] = useState<ErrorShape | undefined>();
   const [importResults, setImportResults] = useState<ImportResults | undefined>();
   const [showImportModal, setShowImportModal] = useState(false);
   const [importPgData, setImportPgData] = useState<ImportPgDataStructure | undefined>(undefined);
+  const [hasConfigError, setHasConfigError] = useState(false);
+
+  // Keeps the import modal in place on a bad file so the retry stays one click
+  // away; the reason itself is transient and belongs to the toast.
+  const handleFile = useCallback(
+    async (file: File) => {
+      const result = await parseConfigFile(file);
+
+      if (!result.success) {
+        setHasConfigError(true);
+        toast.error({ description: result.error, title: t('importModal.error.invalidConfig') });
+        return;
+      }
+
+      setHasConfigError(false);
+      setImportPgData(result.data);
+      setShowImportModal(true);
+    },
+    [t],
+  );
 
   const dataSource = useMemo(() => {
     if (!importResults) return;
@@ -79,14 +109,14 @@ const DataImporter = memo<DataImporterProps>(({ children, onFinishImport }) => {
 
   const isFinished = importState === ImportStage.Success || importState === ImportStage.Error;
 
-  const closeModal = () => {
+  const closeModal = useCallback(() => {
     setImportState(ImportStage.Finished);
     setImportResults(undefined);
     setImportError(undefined);
     setUploadingState(undefined);
 
     onFinishImport?.();
-  };
+  }, [onFinishImport]);
 
   const content = useMemo(() => {
     switch (importState) {
@@ -139,95 +169,51 @@ const DataImporter = memo<DataImporterProps>(({ children, onFinishImport }) => {
         return undefined;
       }
     }
-  }, [importState, fileUploadingState]);
+  }, [closeModal, dataSource, duration, fileUploadingState, importError, importState, t]);
 
   return (
     <>
       <DataStyleModal
         icon={ImportIcon}
-        open={importState !== ImportStage.Start && importState !== ImportStage.Finished}
         title={t('importModal.title')}
         width={isFinished ? 600 : 400}
+        open={
+          hasConfigError ||
+          (importState !== ImportStage.Start && importState !== ImportStage.Finished)
+        }
+        onOpenChange={(open) => {
+          if (!open) setHasConfigError(false);
+        }}
       >
-        {content}
+        {hasConfigError ? (
+          <Center gap={24} padding={40}>
+            <Upload
+              accept={'application/json'}
+              className={cx(styles.wrapper)}
+              maxCount={1}
+              onFiles={([file]) => handleFile(file)}
+            >
+              <Button>{t('importModal.error.selectAnotherFile')}</Button>
+            </Upload>
+          </Center>
+        ) : (
+          content
+        )}
       </DataStyleModal>
       <Upload
         accept={'application/json'}
-        beforeUpload={async (file) => {
-          const config = await parseConfigFile(file);
-          if (!config) return false;
-
-          if (!('schemaHash' in config)) {
-            // TODO: remove in V2
-            await importConfigFile(file, async (config) => {
-              setImportState(ImportStage.Preparing);
-              console.log(config);
-
-              const importConfigState = async (
-                config: ConfigFile,
-                callbacks?: OnImportCallbacks,
-              ): Promise<void> => {
-                if (config.exportType === 'settings') {
-                  await importService.importSettings(config.state.settings);
-                  callbacks?.onStageChange?.(ImportStage.Success);
-                  return;
-                }
-
-                if (config.exportType === 'all') {
-                  await importService.importSettings(config.state.settings);
-                }
-
-                await importService.importData(
-                  {
-                    messages: (config.state as any).messages || [],
-                    sessionGroups: (config.state as any).sessionGroups || [],
-                    sessions: (config.state as any).sessions || [],
-                    topics: (config.state as any).topics || [],
-                    version: config.version,
-                  },
-                  callbacks,
-                );
-              };
-
-              await importConfigState(config, {
-                onError: (error) => {
-                  setImportError(error);
-                },
-                onFileUploading: (state) => {
-                  setUploadingState(state);
-                },
-                onStageChange: (stage) => {
-                  setImportState(stage);
-                },
-                onSuccess: (data, duration) => {
-                  if (data) setImportResults(data);
-                  setDuration(duration);
-                },
-              });
-
-              await refreshSessions();
-              await refreshMessages();
-              await refreshTopics();
-            });
-
-            return false;
-          }
-
-          setImportPgData(config);
-          setShowImportModal(true);
-
-          return false;
-        }}
-        className={styles.wrapper}
+        className={cx(styles.wrapper)}
         maxCount={1}
-        showUploadList={false}
+        onFiles={([file]) => handleFile(file)}
       >
         {/* a very hackable solution: add a pseudo before to have a large hot zone */}
-        <div className={styles.children}>{children}</div>
+        <div className={cx(styles.children)}>{children}</div>
       </Upload>
       {importPgData && (
         <ImportPreviewModal
           importData={importPgData}
+          open={showImportModal}
+          onOpenChange={setShowImportModal}
           onConfirm={async (overwriteExisting) => {
             setImportState(ImportStage.Preparing);
 
@@ -250,12 +236,10 @@ const DataImporter = memo<DataImporterProps>(({ children, onFinishImport }) => {
               overwriteExisting,
             });
 
-            await refreshSessions();
+            await refreshAgentList();
             await refreshMessages();
             await refreshTopics();
           }}
-          onOpenChange={setShowImportModal}
-          open={showImportModal}
         />
       )}
     </>

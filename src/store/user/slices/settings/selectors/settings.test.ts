@@ -1,7 +1,7 @@
-import { HotkeyId } from '@/types/hotkey';
-import { GlobalLLMProviderKey } from '@/types/user/settings';
+import { type HotkeyId } from '@/types/hotkey';
+import { type GlobalLLMProviderKey } from '@/types/user/settings';
 
-import { UserStore } from '../../../store';
+import { type UserStore } from '../../../store';
 import { settingsSelectors } from './settings';
 
 describe('settingsSelectors', () => {
@@ -23,7 +23,6 @@ describe('settingsSelectors', () => {
               params: {},
               tts: {
                 showAllLocaleVoice: false,
-                sttLocale: 'auto',
                 ttsService: 'openai',
                 voice: {
                   openai: 'alloy',
@@ -37,11 +36,8 @@ describe('settingsSelectors', () => {
           },
           tts: {
             openAI: {
-              sttModel: 'whisper-1',
               ttsModel: 'tts-1',
             },
-            sttAutoStop: true,
-            sttServer: 'openai',
           },
           languageModel: {
             openAI: {
@@ -106,9 +102,8 @@ describe('settingsSelectors', () => {
       const s = {
         settings: {
           tts: {
-            sttAutoStop: false,
             openAI: {
-              sttModel: 'whisper-2',
+              ttsModel: 'tts-1-hd',
             },
           },
         },
@@ -117,43 +112,6 @@ describe('settingsSelectors', () => {
       const result = settingsSelectors.currentTTS(s);
 
       expect(result).toMatchSnapshot();
-    });
-  });
-
-  describe('dalleConfig', () => {
-    it('should return the dalle configuration', () => {
-      const s = {
-        settings: {
-          tool: {
-            dalle: {
-              apiKey: 'dalle-api-key',
-              autoGenerate: true,
-            },
-          },
-        },
-      } as unknown as UserStore;
-
-      const result = settingsSelectors.dalleConfig(s);
-
-      expect(result).toMatchSnapshot();
-    });
-  });
-
-  describe('isDalleAutoGenerating', () => {
-    it('should return the autoGenerate flag from dalle configuration', () => {
-      const s = {
-        settings: {
-          tool: {
-            dalle: {
-              autoGenerate: true,
-            },
-          },
-        },
-      } as unknown as UserStore;
-
-      const result = settingsSelectors.isDalleAutoGenerating(s);
-
-      expect(result).toBe(true);
     });
   });
 

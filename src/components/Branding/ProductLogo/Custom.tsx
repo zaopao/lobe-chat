@@ -1,20 +1,17 @@
-import type { IconType } from '@lobehub/icons';
-import type { LobeChatProps } from '@lobehub/ui/brand';
-import { createStyles, useTheme } from 'antd-style';
-import Image, { ImageProps } from 'next/image';
-import { ReactNode, forwardRef, memo } from 'react';
-import { Flexbox, FlexboxProps } from 'react-layout-kit';
+import { BRANDING_LOGO_URL, BRANDING_NAME } from '@lobechat/business-const';
+import { type IconType } from '@lobehub/icons';
+import { type FlexboxProps } from '@lobehub/ui';
+import { Flexbox } from '@lobehub/ui';
+import { type LobeChatProps } from '@lobehub/ui/brand';
+import { cssVar } from '@lobehub/ui/stylex/cssVar.stylex';
+import * as stylex from '@stylexjs/stylex';
+import { type ReactNode } from 'react';
+import { memo } from 'react';
 
-import { BRANDING_LOGO_URL, BRANDING_NAME } from '@/const/branding';
+import Image from '@/libs/next/Image';
+import { type ImageProps } from '@/libs/next/Image';
 
-const useStyles = createStyles(({ css }) => {
-  return {
-    extraTitle: css`
-      font-weight: 300;
-      white-space: nowrap;
-    `,
-  };
-});
+const styles = stylex.create({ extraTitle: { fontWeight: 300, whiteSpace: 'nowrap' } });
 
 const CustomTextLogo = memo<FlexboxProps & { size: number }>(({ size, style, ...rest }) => {
   return (
@@ -48,7 +45,7 @@ const CustomImageLogo = memo<Omit<ImageProps, 'alt' | 'src'> & { size: number }>
   },
 );
 
-const Divider: IconType = forwardRef(({ size = '1em', style, ...rest }, ref) => (
+const Divider: IconType = (({ ref, size = '1em', style, ...rest }) => (
   <svg
     fill="none"
     height={size}
@@ -64,11 +61,9 @@ const Divider: IconType = forwardRef(({ size = '1em', style, ...rest }, ref) => 
   >
     <path d="M16.88 3.549L7.12 20.451" />
   </svg>
-));
+)) as IconType;
 
 const CustomLogo = memo<LobeChatProps>(({ extra, size = 32, className, style, type, ...rest }) => {
-  const theme = useTheme();
-  const { styles } = useStyles();
   let logoComponent: ReactNode;
 
   switch (type) {
@@ -97,7 +92,7 @@ const CustomLogo = memo<LobeChatProps>(({ extra, size = 32, className, style, ty
 
       if (!extra)
         logoComponent = (
-          <Flexbox align={'center'} flex={'none'} horizontal {...rest}>
+          <Flexbox horizontal align={'center'} flex={'none'} {...rest}>
             {logoComponent}
           </Flexbox>
         );
@@ -115,10 +110,10 @@ const CustomLogo = memo<LobeChatProps>(({ extra, size = 32, className, style, ty
   const extraSize = Math.round((size / 3) * 1.9);
 
   return (
-    <Flexbox align={'center'} className={className} flex={'none'} horizontal {...rest}>
+    <Flexbox horizontal align={'center'} className={className} flex={'none'} {...rest}>
       {logoComponent}
-      <Divider size={extraSize} style={{ color: theme.colorFill }} />
-      <div className={styles.extraTitle} style={{ fontSize: extraSize }}>
+      <Divider size={extraSize} style={{ color: cssVar.colorFill }} />
+      <div className={stylex.props(styles.extraTitle).className} style={{ fontSize: extraSize }}>
         {extra}
       </div>
     </Flexbox>

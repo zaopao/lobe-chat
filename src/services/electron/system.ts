@@ -1,9 +1,29 @@
-import { ElectronAppState, dispatch } from '@lobechat/electron-client-ipc';
+import type {
+  AppMenuNode,
+  ElectronAppState,
+  PopupContextMenuParams,
+  PopupContextMenuResult,
+  WindowMinimumSizeParams,
+  WindowSizeParams,
+} from '@lobechat/electron-client-ipc';
+
+import { ensureElectronIpc } from '@/utils/electron/ipc';
+
+export interface SystemFont {
+  label: string;
+  value: string;
+}
+
+export type SystemMonospaceFont = SystemFont;
 
 /**
  * Service class for interacting with Electron's system-level information and actions.
  */
 class ElectronSystemService {
+  private get ipc() {
+    return ensureElectronIpc();
+  }
+
   /**
    * Fetches the application state from the Electron main process.
    * This includes system information (platform, arch) and user-specific paths.
@@ -11,22 +31,102 @@ class ElectronSystemService {
    */
   async getAppState(): Promise<ElectronAppState> {
     // Calls the underlying IPC function to get data from the main process
-    return dispatch('getDesktopAppState');
+    return this.ipc.system.getAppState();
+  }
+
+  async setDesktopOnboardingCompleted(completed: boolean): Promise<void> {
+    return this.ipc.system.setDesktopOnboardingCompleted(completed);
+  }
+
+  async setLastWorkspaceSlug(slug: string | null): Promise<void> {
+    return this.ipc.system.setLastWorkspaceSlug(slug);
+  }
+
+  async getSystemMonospaceFonts(): Promise<SystemFont[]> {
+    return this.ipc.system.getSystemMonospaceFonts();
+  }
+
+  async getSystemFonts(): Promise<SystemFont[]> {
+    return this.ipc.system.getSystemFonts();
   }
 
   async closeWindow(): Promise<void> {
-    return dispatch('closeWindow');
+    return this.ipc.windows.closeWindow();
   }
 
   async maximizeWindow(): Promise<void> {
-    return dispatch('maximizeWindow');
+    return this.ipc.windows.maximizeWindow();
+  }
+
+  async isWindowMaximized(): Promise<boolean> {
+    return this.ipc.windows.isWindowMaximized();
+  }
+
+  async isWindowFullScreen(): Promise<boolean> {
+    return this.ipc.windows.isWindowFullScreen();
   }
 
   async minimizeWindow(): Promise<void> {
-    return dispatch('minimizeWindow');
+    return this.ipc.windows.minimizeWindow();
   }
 
-  // Add other system-related service methods here if needed in the future
+  async setWindowAlwaysOnTop(flag: boolean): Promise<void> {
+    return this.ipc.windows.setWindowAlwaysOnTop(flag);
+  }
+
+  async isWindowAlwaysOnTop(): Promise<boolean> {
+    return this.ipc.windows.isWindowAlwaysOnTop();
+  }
+
+  async setWindowSize(params: WindowSizeParams): Promise<void> {
+    return this.ipc.windows.setWindowSize(params);
+  }
+
+  async setWindowMinimumSize(params: WindowMinimumSizeParams): Promise<void> {
+    return this.ipc.windows.setWindowMinimumSize(params);
+  }
+
+  async openExternalLink(url: string): Promise<void> {
+    return this.ipc.system.openExternalLink(url);
+  }
+
+  async hasLegacyLocalDb(): Promise<boolean> {
+    return this.ipc.system.hasLegacyLocalDb();
+  }
+
+  async runCliCommand(args: string): Promise<{ exitCode: number; stderr: string; stdout: string }> {
+    return this.ipc.cli.runCliCommand(args);
+  }
+
+  showContextMenu = async (type: string, data?: any) => {
+    return this.ipc.menu.showContextMenu({ data, type });
+  };
+
+  popupContextMenu = async (params: PopupContextMenuParams): Promise<PopupContextMenuResult> => {
+    return this.ipc.menu.popupContextMenu(params);
+  };
+
+  closePopupContextMenu = async (): Promise<{ success: boolean }> => {
+    return this.ipc.menu.closePopupContextMenu();
+  };
+
+  getAppMenu = async (): Promise<AppMenuNode[]> => {
+    return this.ipc.menu.getAppMenu();
+  };
+
+  invokeAppMenuItem = async (id: string): Promise<{ success: boolean }> => {
+    return this.ipc.menu.invokeAppMenuItem({ id });
+  };
+
+  /**
+   * Open native folder picker dialog
+   */
+  async selectFolder(params?: {
+    defaultPath?: string;
+    title?: string;
+  }): Promise<{ path: string; repoType?: 'git' | 'github' } | undefined> {
+    return this.ipc.system.selectFolder(params);
+  }
 }
 
 // Export a singleton instance of the service

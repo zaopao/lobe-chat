@@ -1,10 +1,10 @@
-import { PortalImpl } from '../type';
+import { type PortalImpl } from '../type';
 import Body from './Body';
-import Header from './Header';
-import { useEnable } from './useEnable';
+import Title from './Title';
+import { useMessageDetailMoreMenu } from './useMoreMenu';
 
 export const MessageDetail: PortalImpl = {
   Body,
-  Title: Header,
-  useEnable,
+  Title,
+  useMoreMenu: useMessageDetailMoreMenu,
 };

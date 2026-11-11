@@ -1,6 +1,5 @@
-import { css } from 'antd-style';
-import type { FullToken } from 'antd-style/lib/types';
-import { rgba } from 'polished';
+import { shinyTextStyles as sharedShinyTextStyles } from '@lobechat/shared-tool-ui/styles';
+import { createStaticStyles, css } from '@lobehub/ui';
 
 export const dotLoading = css`
   &::after {
@@ -29,27 +28,19 @@ export const dotLoading = css`
   }
 `;
 
-export const shinyTextStylish = (token: FullToken) => css`
-  color: ${rgba(token.colorText, 0.45)};
+export const elapsedTimeStyles = createStaticStyles(({ css, cssVar }) => ({
+  elapsedTime: css`
+    color: ${cssVar.colorTextTertiary};
+  `,
+}));
 
-  background: linear-gradient(
-    120deg,
-    ${rgba(token.colorTextBase, 0)} 40%,
-    ${token.colorTextSecondary} 50%,
-    ${rgba(token.colorTextBase, 0)} 60%
-  );
-  background-clip: text;
-  background-size: 200% 100%;
+export const errorTextStyles = createStaticStyles(({ css, cssVar }) => ({
+  errorText: css`
+    color: ${cssVar.colorError};
+  `,
+}));
 
-  animation: shine 1.5s linear infinite;
-
-  @keyframes shine {
-    0% {
-      background-position: 100%;
-    }
-
-    100% {
-      background-position: -100%;
-    }
-  }
-`;
+export const shinyTextStyles = {
+  errorText: errorTextStyles.errorText,
+  shinyText: sharedShinyTextStyles.shinyText,
+};

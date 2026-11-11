@@ -1,37 +1,29 @@
-import { Skeleton } from 'antd';
-import dynamic from 'next/dynamic';
+import { type ChatMessageError } from '@lobechat/types';
+import { type AlertProps, Skeleton } from '@lobehub/ui';
 import { memo } from 'react';
 
-import { ChatMessage } from '@/types/message';
+import ErrorContent from '@/features/Conversation/ChatItem/components/ErrorContent';
+import dynamic from '@/libs/next/dynamic';
 
-import ErrorJsonViewer from '../ErrorJsonViewer';
+import { getOllamaErrorMessage, getUnresolvedOllamaModel } from './parseOllamaError';
 
-const loading = () => <Skeleton active style={{ width: 300 }} />;
+const loading = () => <Skeleton style={{ width: 300 }} />;
 
-const SetupGuide = dynamic(() => import('@/features/OllamaSetupGuide'), { loading, ssr: false });
+const SetupGuide = dynamic(() => import('../OllamaSetupGuide'), { loading, ssr: false });
 
 const InvalidModel = dynamic(() => import('./InvalidOllamaModel'), { loading, ssr: false });
 
-interface OllamaError {
-  code: string | null;
-  message: string;
-  param?: any;
-  type: string;
+interface OllamaBizErrorProps {
+  alertError?: AlertProps;
+  error?: ChatMessageError | null;
+  id: string;
 }
 
-interface OllamaErrorResponse {
-  error: OllamaError;
-}
-
-const UNRESOLVED_MODEL_REGEXP = /model "([\w+,-_]+)" not found/;
-
-const OllamaBizError = memo<ChatMessage>(({ error, id }) => {
-  const errorBody: OllamaErrorResponse = (error as any)?.body;
-
-  const errorMessage = errorBody.error?.message;
+const OllamaBizError = memo<OllamaBizErrorProps>(({ alertError, error, id }) => {
+  const errorMessage = getOllamaErrorMessage(error);
 
   // error of not pull the model
-  const unresolvedModel = errorMessage?.match(UNRESOLVED_MODEL_REGEXP)?.[1];
+  const unresolvedModel = getUnresolvedOllamaModel(error);
   if (unresolvedModel) {
     return <InvalidModel id={id} model={unresolvedModel} />;
   }
@@ -41,7 +33,8 @@ const OllamaBizError = memo<ChatMessage>(({ error, id }) => {
     return <SetupGuide id={id} />;
   }
 
-  return <ErrorJsonViewer error={error} id={id} />;
+  // Without the alert the message would render empty.
+  return <ErrorContent error={alertError ?? { message: errorMessage, type: 'error' }} id={id} />;
 });
 
 export default OllamaBizError;

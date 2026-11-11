@@ -1,40 +1,79 @@
+import type { ChatCompletionErrorPayload } from '@lobechat/model-runtime';
+import { ChatErrorType } from '@lobechat/types';
 import { NextResponse } from 'next/server';
 
 import { checkAuth } from '@/app/(backend)/middleware/auth';
-import { ChatCompletionErrorPayload, ModelProvider } from '@/libs/model-runtime';
-import { initAgentRuntimeWithUserPayload } from '@/server/modules/AgentRuntime';
-import { ChatErrorType } from '@/types/fetch';
+import { initModelRuntimeForRequest } from '@/server/modules/AgentRuntime/llmRelay/oneShot';
+import { runRouteWithLlmRelayRequest } from '@/server/modules/AgentRuntime/llmRelay/requestScope';
 import { createErrorResponse } from '@/utils/errorResponse';
 
-export const runtime = 'edge';
+import { resolveValidWorkspaceIdFromRequest } from '../../_utils/workspace';
 
-const noNeedAPIKey = (provider: string) => [ModelProvider.OpenRouter].includes(provider as any);
+const getMessageFromError = (error: unknown): string | undefined => {
+  if (error === null || error === undefined) return;
+  if (typeof error === 'string') return error;
 
-export const GET = checkAuth(async (req, { params, jwtPayload }) => {
-  const { provider } = await params;
+  if (error instanceof Error) {
+    if (error.cause instanceof Error && error.cause.message) return error.cause.message;
+    return error.message;
+  }
+
+  if (typeof error !== 'object') return;
+
+  const message = (error as { message?: unknown }).message;
+  return typeof message === 'string' ? message : undefined;
+};
+
+const createModelListErrorResponse = (provider: string, e: unknown) => {
+  let error = e;
+  let errorType: ChatCompletionErrorPayload['errorType'] = ChatErrorType.InternalServerError;
+  let rest: Partial<ChatCompletionErrorPayload> = {};
+
+  if (e && typeof e === 'object') {
+    const {
+      error: errorContent,
+      errorType: payloadErrorType,
+      ...payloadRest
+    } = e as Partial<ChatCompletionErrorPayload>;
+
+    error = errorContent || e;
+    errorType = payloadErrorType || errorType;
+    rest = payloadRest;
+  }
+
+  console.error(`Route: [${provider}] ${errorType}:`, error);
+
+  return createErrorResponse(errorType, {
+    error,
+    ...rest,
+    message: getMessageFromError(error) || getMessageFromError(e) || rest.message,
+    provider,
+  });
+};
+
+// A device-only provider is relayed through the requesting tab, which can take
+// the whole one-shot relay window (240 s).
+export const maxDuration = 300;
+
+export const GET = checkAuth(async (req, { params, userId, serverDB }) => {
+  const provider = (await params)!.provider!;
 
   try {
-    const hasDefaultApiKey = jwtPayload.apiKey || 'dont-need-api-key-for-model-list';
+    const workspaceId = await resolveValidWorkspaceIdFromRequest({ req, serverDB, userId });
 
-    const agentRuntime = await initAgentRuntimeWithUserPayload(provider, {
-      ...jwtPayload,
-      apiKey: noNeedAPIKey(provider) ? hasDefaultApiKey : jwtPayload.apiKey,
+    // A provider only the user's device reaches lists its models through the
+    // requesting tab (one-shot relay).
+    return await runRouteWithLlmRelayRequest(req, userId, async () => {
+      // Read user's provider config from database
+      const agentRuntime = await initModelRuntimeForRequest(serverDB, userId, provider, {
+        workspaceId,
+      });
+
+      const list = await agentRuntime.models();
+
+      return NextResponse.json(list);
     });
-
-    const list = await agentRuntime.models();
-
-    return NextResponse.json(list);
   } catch (e) {
-    const {
-      errorType = ChatErrorType.InternalServerError,
-      error: errorContent,
-      ...res
-    } = e as ChatCompletionErrorPayload;
-
-    const error = errorContent || e;
-    // track the error at server side
-    console.error(`Route: [${provider}] ${errorType}:`, error);
-
-    return createErrorResponse(errorType, { error, ...res, provider });
+    return createModelListErrorResponse(provider, e);
   }
 });

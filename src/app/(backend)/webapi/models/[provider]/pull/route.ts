@@ -1,23 +1,38 @@
+import { type ChatCompletionErrorPayload, type PullModelParams } from '@lobechat/model-runtime';
+import { ChatErrorType } from '@lobechat/types';
+
 import { checkAuth } from '@/app/(backend)/middleware/auth';
-import { ChatCompletionErrorPayload, PullModelParams } from '@/libs/model-runtime';
-import { initAgentRuntimeWithUserPayload } from '@/server/modules/AgentRuntime';
-import { ChatErrorType } from '@/types/fetch';
+import { initModelRuntimeForRequest } from '@/server/modules/AgentRuntime/llmRelay/oneShot';
+import { runRouteWithLlmRelayRequest } from '@/server/modules/AgentRuntime/llmRelay/requestScope';
 import { createErrorResponse } from '@/utils/errorResponse';
 
-export const runtime = 'edge';
+import { resolveValidWorkspaceIdFromRequest } from '../../../_utils/workspace';
 
-export const POST = checkAuth(async (req, { params, jwtPayload }) => {
-  const { provider } = await params;
+// A device-only provider is relayed through the requesting tab, which can take
+// the whole one-shot relay window (240 s).
+export const maxDuration = 300;
+
+export const POST = checkAuth(async (req, { params, userId, serverDB }) => {
+  const provider = (await params)!.provider!;
 
   try {
-    const agentRuntime = await initAgentRuntimeWithUserPayload(provider, jwtPayload);
+    const workspaceId = await resolveValidWorkspaceIdFromRequest({ req, serverDB, userId });
 
-    const data = (await req.json()) as PullModelParams;
+    // A provider only the user's device reaches (Ollama) downloads through the
+    // requesting tab (one-shot relay); the channel stays open while progress streams.
+    return await runRouteWithLlmRelayRequest(req, userId, async () => {
+      // Read user's provider config from database
+      const agentRuntime = await initModelRuntimeForRequest(serverDB, userId, provider, {
+        workspaceId,
+      });
 
-    const res = await agentRuntime.pullModel(data, { signal: req.signal });
-    if (res) return res;
+      const data = (await req.json()) as PullModelParams;
 
-    throw new Error('No response');
+      const res = await agentRuntime.pullModel(data, { signal: req.signal });
+      if (res) return res;
+
+      throw new Error('No response');
+    });
   } catch (e) {
     const {
       errorType = ChatErrorType.InternalServerError,

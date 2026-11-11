@@ -1,24 +1,23 @@
-import { Icon, Tag, Tooltip } from '@lobehub/ui';
-import { createStyles } from 'antd-style';
+import { cx, Flexbox, Icon, Tag, Tooltip } from '@lobehub/ui';
+import { cssVar } from '@lobehub/ui/stylex/cssVar.stylex';
+import * as stylex from '@stylexjs/stylex';
 import { BoltIcon, RotateCwIcon } from 'lucide-react';
-import { darken, lighten } from 'polished';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Flexbox } from 'react-layout-kit';
 
-import { AsyncTaskStatus, FileParsingTask } from '@/types/asyncTask';
+import { type FileParsingTask } from '@/types/asyncTask';
+import { AsyncTaskErrorType, AsyncTaskStatus } from '@/types/asyncTask';
 
-const useStyles = createStyles(({ css, token, isDarkMode }) => ({
-  errorReason: css`
-    padding: 4px;
-    border-radius: 4px;
-
-    font-family: monospace;
-    font-size: 12px;
-
-    background: ${isDarkMode ? darken(0.1, token.colorText) : lighten(0.1, token.colorText)};
-  `,
-}));
+const styles = stylex.create({
+  errorReason: {
+    padding: '4px',
+    borderRadius: '4px',
+    fontFamily: 'monospace',
+    fontSize: '12px',
+    backgroundColor: cssVar.colorFillTertiary,
+    backgroundImage: 'none',
+  },
+});
 
 interface EmbeddingStatusProps extends FileParsingTask {
   className?: string;
@@ -29,24 +28,23 @@ interface EmbeddingStatusProps extends FileParsingTask {
 const EmbeddingStatus = memo<EmbeddingStatusProps>(
   ({ chunkCount, embeddingStatus, embeddingError, onClick, onErrorClick, className }) => {
     const { t } = useTranslation(['components', 'common']);
-    const { styles, cx } = useStyles();
 
     switch (embeddingStatus) {
       case AsyncTaskStatus.Processing: {
         return (
           <Flexbox horizontal>
             <Tooltip
+              title={t('FileParsingStatus.chunks.embeddingStatus.processing')}
               styles={{
                 root: { pointerEvents: 'none' },
               }}
-              title={t('FileParsingStatus.chunks.embeddingStatus.processing')}
             >
               <Tag
-                bordered={false}
                 className={cx('chunk-tag', className)}
                 color={'processing'}
-                icon={<Icon icon={BoltIcon} spin />}
+                icon={<Icon spin icon={BoltIcon} />}
                 style={{ cursor: 'pointer' }}
+                variant={'filled'}
               >
                 {chunkCount}
               </Tag>
@@ -56,34 +54,46 @@ const EmbeddingStatus = memo<EmbeddingStatusProps>(
       }
 
       case AsyncTaskStatus.Error: {
+        // A full vector quota is not a failure retrying can fix by itself: name the quota
+        // and how to free it instead of showing the raw error as a generic failure.
+        const isQuotaExceeded = embeddingError?.name === AsyncTaskErrorType.EmbeddingQuotaExceeded;
+
         return (
           <Tooltip
             styles={{
               root: { maxWidth: 340, pointerEvents: 'none' },
             }}
             title={
-              <Flexbox gap={4}>
-                {t('FileParsingStatus.chunks.embeddingStatus.errorResult')}
-                {embeddingError && (
-                  <Flexbox className={styles.errorReason}>
-                    [{embeddingError.name}]:{' '}
-                    {embeddingError.body && typeof embeddingError.body !== 'string'
-                      ? embeddingError.body.detail
-                      : embeddingError.body}
-                  </Flexbox>
-                )}
-              </Flexbox>
+              isQuotaExceeded ? (
+                t('FileParsingStatus.chunks.embeddingStatus.quotaExceededResult')
+              ) : (
+                <Flexbox gap={4}>
+                  {t('FileParsingStatus.chunks.embeddingStatus.errorResult')}
+                  {embeddingError && (
+                    <Flexbox className={stylex.props(styles.errorReason).className}>
+                      [{embeddingError.name}]:{' '}
+                      {embeddingError.body && typeof embeddingError.body !== 'string'
+                        ? embeddingError.body.detail
+                        : embeddingError.body}
+                    </Flexbox>
+                  )}
+                </Flexbox>
+              )
             }
           >
-            <Tag bordered={false} className={className} color={'error'}>
-              {t('FileParsingStatus.chunks.embeddingStatus.error')}{' '}
+            <Tag className={className} color={'error'} variant={'filled'}>
+              {t(
+                isQuotaExceeded
+                  ? 'FileParsingStatus.chunks.embeddingStatus.quotaExceeded'
+                  : 'FileParsingStatus.chunks.embeddingStatus.error',
+              )}{' '}
               <Icon
                 icon={RotateCwIcon}
+                style={{ cursor: 'pointer' }}
+                title={t('retry', { ns: 'common' })}
                 onClick={() => {
                   onErrorClick?.('embedding');
                 }}
-                style={{ cursor: 'pointer' }}
-                title={t('retry', { ns: 'common' })}
               />
             </Tag>
           </Tooltip>
@@ -98,14 +108,14 @@ const EmbeddingStatus = memo<EmbeddingStatusProps>(
               title={t('FileParsingStatus.chunks.embeddingStatus.success')}
             >
               <Tag
-                bordered={false}
                 className={cx('chunk-tag', className)}
                 color={'purple'}
                 icon={<Icon icon={BoltIcon} />}
+                style={{ cursor: 'pointer' }}
+                variant={'filled'}
                 onClick={() => {
                   onClick?.(AsyncTaskStatus.Success);
                 }}
-                style={{ cursor: 'pointer' }}
               >
                 {chunkCount}
               </Tag>

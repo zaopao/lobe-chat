@@ -1,8 +1,6 @@
-import { Icon } from '@lobehub/ui';
-import { Switch, Typography } from 'antd';
+import { Flexbox, Icon, Switch, Text } from '@lobehub/ui';
 import { GitBranch } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Flexbox } from 'react-layout-kit';
 
 import { useChatStore } from '@/store/chat';
 import { portalThreadSelectors } from '@/store/chat/selectors';
@@ -15,21 +13,21 @@ const NewThreadHeader = () => {
   const [newThreadMode] = useChatStore((s) => [portalThreadSelectors.newThreadMode(s)]);
 
   return (
-    <Flexbox align={'center'} gap={8} horizontal style={{ marginInlineStart: 4 }}>
+    <Flexbox horizontal align={'center'} gap={8} style={{ marginInlineStart: 4 }}>
       <Icon icon={GitBranch} size={18} />
-      <Typography.Text className={oneLineEllipsis} ellipsis={true} style={{ fontSize: 14 }}>
+      <Text ellipsis className={oneLineEllipsis} style={{ fontSize: 14 }}>
         {t('newPortalThread.title')}
-      </Typography.Text>
-      <Flexbox align={'center'} gap={8} horizontal>
+      </Text>
+      <Flexbox horizontal align={'center'} gap={8}>
         <Switch
           checked={newThreadMode === ThreadType.Continuation}
+          size={'small'}
+          style={{ marginInlineStart: 12 }}
           onChange={(e) => {
             useChatStore.setState({
               newThreadMode: e ? ThreadType.Continuation : ThreadType.Standalone,
             });
           }}
-          size={'small'}
-          style={{ marginInlineStart: 12 }}
         />
         {t('newPortalThread.includeContext')}
       </Flexbox>

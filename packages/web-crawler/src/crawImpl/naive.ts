@@ -1,28 +1,32 @@
-import { CrawlImpl, CrawlSuccessResult } from '../type';
-import { NetworkConnectionError, PageNotFoundError, TimeoutError } from '../utils/errorType';
-import { htmlToMarkdown } from '../utils/htmlToMarkdown';
+import { ssrfSafeFetch } from '@lobechat/ssrf-safe-fetch';
+
+import type { CrawlImpl, CrawlSuccessResult } from '../type';
+import { PageNotFoundError, toFetchError, UnsupportedContentError } from '../utils/errorType';
+import { htmlToMarkdown, MAX_HTML_SIZE } from '../utils/htmlToMarkdown';
+import { createHTTPStatusError } from '../utils/response';
+import { isNonDocumentContentType } from '../utils/urlPreflight';
 import { DEFAULT_TIMEOUT, withTimeout } from '../utils/withTimeout';
 
 const mixinHeaders = {
-  // 接受的内容类型
+  // Accepted content types
   'Accept':
     'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-  // 接受的编码方式
+  // Accepted encoding methods
   'Accept-Encoding': 'gzip, deflate, br',
-  // 接受的语言
+  // Accepted languages
   'Accept-Language': 'en-US,en;q=0.9,zh;q=0.8',
-  // 缓存控制
+  // Cache control
   'Cache-Control': 'max-age=0',
-  // 连接类型
+  // Connection type
   'Connection': 'keep-alive',
-  // 表明请求来自哪个站点
+  // Indicates which site the request is from
   'Referer': 'https://www.google.com/',
-  // 升级不安全请求
+  // Upgrade insecure requests
   'Upgrade-Insecure-Requests': '1',
-  // 模拟真实浏览器的 User-Agent
+  // Simulate real browser User-Agent
   'User-Agent':
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-  // 防止跨站请求伪造
+  // Prevent cross-site request forgery
   'sec-ch-ua': '"Google Chrome";v="121", "Not A(Brand";v="99", "Chromium";v="121"',
   'sec-ch-ua-mobile': '?0',
   'sec-ch-ua-platform': '"Windows"',
@@ -36,30 +40,39 @@ export const naive: CrawlImpl = async (url, { filterOptions }) => {
   let res: Response;
 
   try {
-    res = await withTimeout(
-      fetch(url, {
-        headers: mixinHeaders,
-        signal: new AbortController().signal,
-      }),
-      DEFAULT_TIMEOUT,
-    );
+    res = await withTimeout(async (signal) => {
+      const streamed = await ssrfSafeFetch(
+        url,
+        {
+          headers: mixinHeaders,
+          signal,
+        },
+        { maxContentLength: MAX_HTML_SIZE },
+      );
+      // ssrfSafeFetch resolves at the headers; buffer the capped body under the same
+      // timeout so a server that keeps dripping bytes cannot stall the crawl.
+      const body = streamed.body ? await streamed.arrayBuffer() : null;
+      return new Response(body, streamed);
+    }, DEFAULT_TIMEOUT);
   } catch (e) {
-    const error = e as Error;
-    if (error.message === 'fetch failed') {
-      throw new NetworkConnectionError();
-    }
-
-    if (error instanceof TimeoutError) {
-      throw error;
-    }
-
-    throw e;
+    throw toFetchError(e);
   }
 
-  if (res.status === 404) {
-    throw new PageNotFoundError(res.statusText);
+  if (res.status === 404 || res.status === 410) {
+    throw new PageNotFoundError(res.statusText, res.status);
   }
+
+  if (!res.ok) {
+    throw await createHTTPStatusError(res, 'Naive');
+  }
+
   const type = res.headers.get('content-type');
+
+  // images / fonts / media / archives have no readable body — surface that instead of
+  // handing binary bytes to the HTML parser (and falling through to the next provider)
+  if (isNonDocumentContentType(type)) {
+    throw new UnsupportedContentError(`URL points to non-document content (${type})`);
+  }
 
   if (type?.includes('application/json')) {
     let content: string;
@@ -72,7 +85,7 @@ export const naive: CrawlImpl = async (url, { filterOptions }) => {
     }
 
     return {
-      content: content,
+      content,
       contentType: 'json',
       length: content.length,
       url,
@@ -89,8 +102,8 @@ export const naive: CrawlImpl = async (url, { filterOptions }) => {
       return;
     }
 
-    // it's blocked by cloudflare
-    if (result.title !== 'Just a moment...') {
+    // It's blocked by Cloudflare.
+    if (result.title === 'Just a moment...') {
       return;
     }
 
@@ -105,7 +118,7 @@ export const naive: CrawlImpl = async (url, { filterOptions }) => {
       url,
     } satisfies CrawlSuccessResult;
   } catch (error) {
-    console.error(error);
+    console.error('[naive]', error);
   }
 
   return;

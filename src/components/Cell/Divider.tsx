@@ -1,22 +1,32 @@
 'use client';
 
-import { createStyles } from 'antd-style';
-import { rgba } from 'polished';
+import { cssVar } from '@lobehub/ui/stylex/cssVar.stylex';
+import * as stylex from '@stylexjs/stylex';
 import { memo } from 'react';
 
-const useStyles = createStyles(
-  ({ css, token, isDarkMode }) => css`
-    flex: none;
-    width: 100%;
-    height: 6px;
-    background: ${isDarkMode ? rgba(token.colorFillTertiary, 0.04) : token.colorFillTertiary};
-  `,
-);
+import { useIsDark } from '@/hooks/useIsDark';
+
+const styles = stylex.create({
+  dividerDark: {
+    flex: 'none',
+    width: '100%',
+    height: '6px',
+    backgroundColor: `color-mix(in srgb, ${cssVar.colorFillTertiary} 4%, transparent)`,
+    backgroundImage: 'none',
+  },
+  dividerLight: {
+    flex: 'none',
+    width: '100%',
+    height: '6px',
+    backgroundColor: cssVar.colorFillTertiary,
+    backgroundImage: 'none',
+  },
+});
 
 const Divider = memo(() => {
-  const { styles } = useStyles();
+  const isDarkMode = useIsDark();
 
-  return <div className={styles} />;
+  return <div {...stylex.props(isDarkMode ? styles.dividerDark : styles.dividerLight)} />;
 });
 
 export default Divider;

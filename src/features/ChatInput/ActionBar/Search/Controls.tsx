@@ -1,37 +1,39 @@
-import { Icon } from '@lobehub/ui';
+import { Center, createStaticStyles, cssVar, cx, Divider, Flexbox, Icon } from '@lobehub/ui';
 import { GlobeOffIcon } from '@lobehub/ui/icons';
-import { Divider } from 'antd';
-import { createStyles } from 'antd-style';
-import { LucideIcon, SparkleIcon } from 'lucide-react';
-import { memo } from 'react';
+import { type LucideIcon } from 'lucide-react';
+import { SparkleIcon } from 'lucide-react';
+import { memo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Center, Flexbox } from 'react-layout-kit';
 
+import { usePermission } from '@/hooks/usePermission';
 import { useAgentStore } from '@/store/agent';
-import { agentChatConfigSelectors, agentSelectors } from '@/store/agent/slices/chat';
+import { chatConfigByIdSelectors } from '@/store/agent/selectors';
 import { aiModelSelectors, aiProviderSelectors, useAiInfraStore } from '@/store/aiInfra';
-import { SearchMode } from '@/types/search';
+import { type SearchMode } from '@/types/search';
 
+import { useAgentId } from '../../hooks/useAgentId';
+import { useEffectiveModel } from '../../hooks/useEffectiveModel';
+import { useUpdateAgentConfig } from '../../hooks/useUpdateAgentConfig';
 import FCSearchModel from './FCSearchModel';
 import ModelBuiltinSearch from './ModelBuiltinSearch';
 
-const useStyles = createStyles(({ css, token }) => ({
+const styles = createStaticStyles(({ css }) => ({
   active: css`
-    background: ${token.colorFillTertiary};
+    background: ${cssVar.colorFillTertiary};
   `,
   check: css`
     margin-inline-start: 12px;
     font-size: 16px;
-    color: ${token.colorPrimary};
+    color: ${cssVar.colorPrimary};
   `,
   description: css`
     font-size: 12px;
-    color: ${token.colorTextDescription};
+    color: ${cssVar.colorTextDescription};
   `,
   icon: css`
-    border: 1px solid ${token.colorFillTertiary};
-    border-radius: ${token.borderRadius}px;
-    background: ${token.colorBgElevated};
+    border: 1px solid ${cssVar.colorFillTertiary};
+    border-radius: ${cssVar.borderRadius};
+    background: ${cssVar.colorBgElevated};
   `,
   option: css`
     cursor: pointer;
@@ -39,18 +41,18 @@ const useStyles = createStyles(({ css, token }) => ({
     width: 100%;
     padding-block: 8px;
     padding-inline: 8px;
-    border-radius: ${token.borderRadius}px;
+    border-radius: ${cssVar.borderRadius};
 
     transition: background-color 0.2s;
 
     &:hover {
-      background: ${token.colorFillTertiary};
+      background: ${cssVar.colorFillTertiary};
     }
   `,
   title: css`
     font-size: 14px;
     font-weight: 500;
-    color: ${token.colorText};
+    color: ${cssVar.colorText};
   `,
 }));
 
@@ -63,20 +65,24 @@ interface NetworkOption {
 }
 
 const Item = memo<NetworkOption>(({ value, description, icon, label }) => {
-  const { cx, styles } = useStyles();
-  const [mode, updateAgentChatConfig] = useAgentStore((s) => [
-    agentChatConfigSelectors.agentSearchMode(s),
-    s.updateAgentChatConfig,
-  ]);
+  const agentId = useAgentId();
+  const { updateAgentChatConfig } = useUpdateAgentConfig();
+  const mode = useAgentStore((s) => chatConfigByIdSelectors.getSearchModeById(agentId)(s));
+  const { allowed: canCreate } = usePermission('create_content');
 
   return (
     <Flexbox
+      horizontal
       align={'flex-start'}
       className={cx(styles.option, mode === value && styles.active)}
       gap={12}
-      horizontal
       key={value}
+      style={{
+        cursor: canCreate ? undefined : 'not-allowed',
+        opacity: canCreate ? undefined : 0.5,
+      }}
       onClick={async () => {
+        if (!canCreate) return;
         await updateAgentChatConfig({ searchMode: value });
       }}
     >
@@ -91,11 +97,20 @@ const Item = memo<NetworkOption>(({ value, description, icon, label }) => {
   );
 });
 
-const Controls = memo(() => {
-  const { t } = useTranslation('chat');
-  const [model, provider] = useAgentStore((s) => [
-    agentSelectors.currentAgentModel(s),
-    agentSelectors.currentAgentModelProvider(s),
+/**
+ * Search settings that are only meaningful once web search is on: which engine
+ * answers (app tool vs the model's built-in search) and which model runs the
+ * function-calling search. Extracted so the search capability row in the
+ * chat-input Tools popover can host it beside the Auto/Disable policy.
+ */
+export const SearchAdvancedControls = memo(() => {
+  const agentId = useAgentId();
+  const { allowed: canCreate } = usePermission('create_content');
+
+  const { model, provider } = useEffectiveModel(agentId);
+  const [useModelBuiltinSearch, searchMode] = useAgentStore((s) => [
+    chatConfigByIdSelectors.getUseModelBuiltinSearchById(agentId)(s),
+    chatConfigByIdSelectors.getChatConfigById(agentId)(s).searchMode,
   ]);
 
   const supportFC = useAiInfraStore(aiModelSelectors.isModelSupportToolUse(model, provider));
@@ -105,33 +120,90 @@ const Controls = memo(() => {
   const isModelHasBuiltinSearchConfig = useAiInfraStore(
     aiModelSelectors.isModelHasBuiltinSearchConfig(model, provider),
   );
+  const isModelBuiltinSearchInternal = useAiInfraStore(
+    aiModelSelectors.isModelBuiltinSearchInternal(model, provider),
+  );
+  const modelBuiltinSearchImpl = useAiInfraStore(
+    aiModelSelectors.modelBuiltinSearchImpl(model, provider),
+  );
 
-  const options: NetworkOption[] = [
-    {
-      description: t('search.mode.off.desc'),
-      icon: GlobeOffIcon,
-      label: t('search.mode.off.title'),
-      value: 'off',
-    },
-    {
-      description: t('search.mode.auto.desc'),
-      icon: SparkleIcon,
-      label: t('search.mode.auto.title'),
-      value: 'auto',
-    },
-  ];
+  const showModelBuiltinSearch =
+    searchMode !== 'off' &&
+    !isModelBuiltinSearchInternal &&
+    (isModelHasBuiltinSearchConfig || isProviderHasBuiltinSearchConfig);
 
-  const showDivider = isModelHasBuiltinSearchConfig || !supportFC;
-  const showModelBuiltinSearch = isModelHasBuiltinSearchConfig || isProviderHasBuiltinSearchConfig;
+  const showFCSearchModel =
+    !supportFC &&
+    (!modelBuiltinSearchImpl || (!isModelBuiltinSearchInternal && !useModelBuiltinSearch));
+
+  if (!showModelBuiltinSearch && !showFCSearchModel) return null;
+
+  return (
+    <>
+      <Divider style={{ margin: 0 }} />
+      {showModelBuiltinSearch && <ModelBuiltinSearch disabled={!canCreate} />}
+      {showFCSearchModel && <FCSearchModel disabled={!canCreate} />}
+    </>
+  );
+});
+
+SearchAdvancedControls.displayName = 'SearchAdvancedControls';
+
+const Controls = memo(() => {
+  const { t } = useTranslation('chat');
+  const agentId = useAgentId();
+  const { updateAgentChatConfig } = useUpdateAgentConfig();
+  const { allowed: canCreate } = usePermission('create_content');
+
+  const { model, provider } = useEffectiveModel(agentId);
+  const searchMode = useAgentStore(
+    (s) => chatConfigByIdSelectors.getChatConfigById(agentId)(s).searchMode,
+  );
+
+  const isModelBuiltinSearchInternal = useAiInfraStore(
+    aiModelSelectors.isModelBuiltinSearchInternal(model, provider),
+  );
+
+  useEffect(() => {
+    if (!canCreate) return;
+    if (isModelBuiltinSearchInternal && (searchMode ?? 'auto') === 'off') {
+      // Auto-correction for a model whose search can't be turned off — the user
+      // didn't touch the toggle, so a rejected write must stay silent instead of
+      // reporting a change they never made (automatic corrections must not trigger phantom save-error toasts).
+      updateAgentChatConfig({ searchMode: 'auto' }, { showErrorMessage: false });
+    }
+  }, [canCreate, isModelBuiltinSearchInternal, searchMode, updateAgentChatConfig]);
+
+  const options: NetworkOption[] = isModelBuiltinSearchInternal
+    ? [
+        {
+          description: t('search.mode.auto.desc'),
+          icon: SparkleIcon,
+          label: t('search.mode.auto.title'),
+          value: 'auto',
+        },
+      ]
+    : [
+        {
+          description: t('search.mode.off.desc'),
+          icon: GlobeOffIcon,
+          label: t('search.mode.off.title'),
+          value: 'off',
+        },
+        {
+          description: t('search.mode.auto.desc'),
+          icon: SparkleIcon,
+          label: t('search.mode.auto.title'),
+          value: 'auto',
+        },
+      ];
 
   return (
     <Flexbox gap={4}>
       {options.map((option) => (
         <Item {...option} key={option.value} />
       ))}
-      {showDivider && <Divider style={{ margin: 0 }} />}
-      {showModelBuiltinSearch && <ModelBuiltinSearch />}
-      {!supportFC && <FCSearchModel />}
+      <SearchAdvancedControls />
     </Flexbox>
   );
 });

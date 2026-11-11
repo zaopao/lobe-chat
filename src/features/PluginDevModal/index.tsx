@@ -1,90 +1,176 @@
-import { Alert, Button, Drawer, Icon, Segmented, Tag } from '@lobehub/ui';
-import { App, Form, Popconfirm } from 'antd';
-import { useResponsive } from 'antd-style';
-import { MoveUpRight } from 'lucide-react';
-import { memo, useEffect, useState } from 'react';
-import { Trans, useTranslation } from 'react-i18next';
-import { Flexbox } from 'react-layout-kit';
+import { isDesktop } from '@lobechat/const';
+import { TITLE_BAR_HEIGHT } from '@lobechat/desktop-bridge';
+import { type LobeToolCustomPlugin } from '@lobechat/types';
+import { Button, confirmModal, Drawer, Flexbox, toast, useResponsive } from '@lobehub/ui';
+import { useForm, useWatch } from '@lobehub/ui/form';
+import { memo, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
-import { WIKI_PLUGIN_GUIDE } from '@/const/url';
-import { LobeToolCustomPlugin } from '@/types/tool/plugin';
+import { openConnectorOAuthPopup } from '@/utils/connectorOAuth';
 
 import MCPManifestForm from './MCPManifestForm';
 import PluginPreview from './PluginPreview';
-import UrlManifestForm from './UrlManifestForm';
+import { pruneHiddenFields } from './pruneHiddenFields';
+import { getSaveErrorToast } from './saveErrorToast';
+
+const INITIAL_VALUES = {
+  customParams: { mcp: { auth: { type: 'none' }, type: 'http' } },
+} as LobeToolCustomPlugin;
 
 interface DevModalProps {
+  /** Enable the connector-backed OAuth auth type in the MCP form (see MCPManifestForm). */
+  enableOAuth?: boolean;
   mode?: 'edit' | 'create';
   onDelete?: () => void;
   onOpenChange: (open: boolean) => void;
-  onSave?: (value: LobeToolCustomPlugin) => Promise<void> | void;
+  onSave?: (
+    value: LobeToolCustomPlugin,
+    ctx?: { oauthPopup?: Window | null },
+  ) => Promise<void> | void;
   onValueChange?: (value: Partial<LobeToolCustomPlugin>) => void;
   open?: boolean;
   value?: LobeToolCustomPlugin;
 }
 
 const DevModal = memo<DevModalProps>(
-  ({ open, mode = 'create', value, onValueChange, onSave, onOpenChange, onDelete }) => {
+  ({
+    open,
+    mode = 'create',
+    value,
+    onValueChange,
+    onSave,
+    onOpenChange,
+    onDelete,
+    enableOAuth,
+  }) => {
     const isEditMode = mode === 'edit';
-    const [configMode, setConfigMode] = useState<'url' | 'mcp'>('mcp');
     const { t } = useTranslation('plugin');
-    const { message } = App.useApp();
 
     const [submitting, setSubmitting] = useState(false);
 
     const { mobile } = useResponsive();
-    const [form] = Form.useForm();
+    const form = useForm<LobeToolCustomPlugin>({
+      initialValues: INITIAL_VALUES,
+      onSubmit: async (values) => {
+        await doSave(values);
+      },
+      onValuesChange: (_, values) => {
+        onValueChange?.(values);
+      },
+    });
+    const authType = useWatch(form, 'customParams.mcp.auth.type');
+
+    // Seed the form once per modal open, waiting for `value` to arrive (it may
+    // be undefined initially while edit-mode credentials are being fetched).
+    const seededRef = useRef(false);
     useEffect(() => {
-      form.setFieldsValue(value);
-    }, []);
+      if (!open) {
+        seededRef.current = false;
+        return;
+      }
+      if (value !== undefined && !seededRef.current) {
+        form.setValues(value);
+        seededRef.current = true;
+      }
+    }, [open, value]);
+
+    const doSave = async (values: LobeToolCustomPlugin, ctx?: { oauthPopup?: Window | null }) => {
+      if (!onSave) {
+        toast.success(t(isEditMode ? 'dev.updateSuccess' : 'dev.saveSuccess'));
+        onOpenChange(false);
+        return;
+      }
+      setSubmitting(true);
+      try {
+        await onSave(pruneHiddenFields(values), ctx);
+        toast.success(t(isEditMode ? 'dev.updateSuccess' : 'dev.saveSuccess'));
+        onOpenChange(false);
+      } catch (error) {
+        console.error('[DevModal] Install failed:', error);
+        const { description, titleKey } = getSaveErrorToast(error, Boolean(ctx));
+        const title =
+          titleKey === 'dev.permissionDenied'
+            ? t(
+                'dev.permissionDenied',
+                'You are not allowed to modify this connector — only the creator or a workspace owner can',
+              )
+            : t(titleKey as never);
+        toast.error(description ? { description, title } : title);
+      } finally {
+        ctx?.oauthPopup?.close();
+        setSubmitting(false);
+      }
+    };
+
+    // Web OAuth needs window.open within the user-gesture tick (browsers block it
+    // after an async boundary). Open a blank popup synchronously here, validate,
+    // then hand it to onSave. Desktop opens a native window via IPC instead. Shared by
+    // the footer save button and the in-form "Authorize" button.
+    const runOAuthFlow = async () => {
+      if (submitting) return;
+      const popup = openConnectorOAuthPopup();
+      if (popup === null) {
+        toast.error(t('dev.oauthError.blocked'));
+        return;
+      }
+      const { valid } = await form.validate();
+      if (!valid) {
+        popup?.close();
+        return;
+      }
+      await doSave(form.getValues(), { oauthPopup: popup });
+    };
+
+    const handlePrimaryClick = () => {
+      if (enableOAuth && authType === 'oauth2') return runOAuthFlow();
+      form.submit();
+    };
 
     useEffect(() => {
-      if (mode === 'create' && !open) form.resetFields();
+      if (mode === 'create' && !open) form.reset(INITIAL_VALUES);
     }, [open]);
 
     const buttonStyle = mobile ? { flex: 1 } : { margin: 0 };
 
     const footer = (
-      <Flexbox flex={1} gap={12} horizontal justify={'space-between'}>
+      <Flexbox horizontal flex={1} gap={12} justify={'space-between'}>
         {isEditMode ? (
-          <Popconfirm
-            arrow={false}
-            cancelText={t('cancel', { ns: 'common' })}
-            okButtonProps={{
-              danger: true,
-              type: 'primary',
-            }}
-            okText={t('ok', { ns: 'common' })}
-            onConfirm={() => {
-              onDelete?.();
-              message.success(t('dev.deleteSuccess'));
-            }}
-            placement={'topLeft'}
-            title={t('dev.confirmDeleteDevPlugin')}
+          <Button
+            danger
+            style={buttonStyle}
+            onClick={() =>
+              confirmModal({
+                cancelText: t('cancel', { ns: 'common' }),
+                okButtonProps: { danger: true },
+                okText: t('ok', { ns: 'common' }),
+                onOk: () => {
+                  onDelete?.();
+                  toast.success(t('dev.deleteSuccess'));
+                },
+                content: t('dev.confirmDeleteDevPlugin'),
+                title: t('delete', { ns: 'common' }),
+              })
+            }
           >
-            <Button danger style={buttonStyle}>
-              {t('delete', { ns: 'common' })}
-            </Button>
-          </Popconfirm>
+            {t('delete', { ns: 'common' })}
+          </Button>
         ) : (
           <div />
         )}
-        <Flexbox gap={12} horizontal>
+        <Flexbox horizontal gap={12}>
           <Button
+            style={buttonStyle}
             onClick={() => {
               onOpenChange(false);
             }}
-            style={buttonStyle}
           >
             {t('cancel', { ns: 'common' })}
           </Button>
           <Button
             loading={submitting}
-            onClick={() => {
-              form.submit();
-            }}
             style={buttonStyle}
             type={'primary'}
+            onClick={handlePrimaryClick}
           >
             {t(isEditMode ? 'dev.update' : 'dev.save')}
           </Button>
@@ -93,110 +179,44 @@ const DevModal = memo<DevModalProps>(
     );
 
     return (
-      <Form.Provider
-        onFormChange={() => {
-          onValueChange?.(form.getFieldsValue());
+      <Drawer
+        containerMaxWidth={'auto'}
+        footer={footer}
+        height={isDesktop ? `calc(100vh - ${TITLE_BAR_HEIGHT}px)` : '100vh'}
+        open={open}
+        placement={'bottom'}
+        push={false}
+        title={t(isEditMode ? 'dev.title.skillSettings' : 'dev.title.create')}
+        width={mobile ? '100%' : 800}
+        styles={{
+          bodyContent: {
+            height: '100%',
+            padding: 0,
+          },
         }}
-        onFormFinish={async (_, info) => {
-          if (onSave) {
-            setSubmitting(true);
-
-            await onSave?.(info.values as LobeToolCustomPlugin);
-            setSubmitting(false);
-          }
-          message.success(t(isEditMode ? 'dev.updateSuccess' : 'dev.saveSuccess'));
+        onClose={() => {
           onOpenChange(false);
         }}
       >
-        <Drawer
-          containerMaxWidth={'auto'}
-          destroyOnHidden
-          footer={footer}
-          height={'100vh'}
-          onClose={(e) => {
+        <Flexbox
+          horizontal
+          gap={0}
+          height={'100%'}
+          onClick={(e) => {
             e.stopPropagation();
-            onOpenChange(false);
           }}
-          open={open}
-          placement={'bottom'}
-          push={false}
-          styles={{
-            body: {
-              padding: 0,
-            },
-            bodyContent: {
-              height: '100%',
-            },
-          }}
-          title={t(isEditMode ? 'dev.title.edit' : 'dev.title.create')}
-          width={mobile ? '100%' : 800}
         >
-          <Flexbox
-            gap={0}
-            height={'100%'}
-            horizontal
-            onClick={(e) => {
-              e.stopPropagation();
-            }}
-          >
-            <Flexbox flex={3} gap={16} padding={24} style={{ overflowY: 'auto' }}>
-              <Segmented
-                block
-                onChange={(e) => {
-                  setConfigMode(e as 'url' | 'mcp');
-                }}
-                options={[
-                  {
-                    label: (
-                      <Flexbox align={'center'} gap={4} horizontal justify={'center'}>
-                        {t('dev.manifest.mode.mcp')}
-                        <div>
-                          <Tag bordered={false} color={'warning'}>
-                            {t('dev.manifest.mode.mcpExp')}
-                          </Tag>
-                        </div>
-                      </Flexbox>
-                    ),
-                    value: 'mcp',
-                  },
-                  {
-                    label: t('dev.manifest.mode.url'),
-                    value: 'url',
-                  },
-                ]}
-                value={configMode}
-                variant={'filled'}
-              />
-
-              {configMode === 'url' && (
-                <>
-                  <Alert
-                    message={
-                      <Trans i18nKey={'dev.modalDesc'} ns={'plugin'}>
-                        添加自定义插件后，可用于插件开发验证，也可直接在会话中使用。插件开发文档请参考：
-                        <a
-                          href={WIKI_PLUGIN_GUIDE}
-                          rel="noreferrer"
-                          style={{ paddingInline: 8 }}
-                          target={'_blank'}
-                        >
-                          文档
-                        </a>
-                        <Icon icon={MoveUpRight} />
-                      </Trans>
-                    }
-                    showIcon
-                    type={'info'}
-                  />
-                  <UrlManifestForm form={form} isEditMode={isEditMode} />
-                </>
-              )}
-              {configMode === 'mcp' && <MCPManifestForm form={form} isEditMode={isEditMode} />}
-            </Flexbox>
-            <PluginPreview form={form} />
+          <Flexbox flex={3} gap={16} padding={24} style={{ overflowY: 'auto' }}>
+            <MCPManifestForm
+              enableOAuth={enableOAuth}
+              form={form}
+              isEditMode={isEditMode}
+              onAuthorizeOAuth={runOAuthFlow}
+            />
           </Flexbox>
-        </Drawer>
-      </Form.Provider>
+          <PluginPreview form={form} />
+        </Flexbox>
+      </Drawer>
     );
   },
 );

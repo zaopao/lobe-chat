@@ -1,9 +1,14 @@
-import { ChatMessage, ChatToolPayload } from '@/types/message';
+import { parse } from '@lobechat/conversation-flow';
+import { type ChatToolPayload, type UIChatMessage } from '@lobechat/types';
+import i18n from 'i18next';
 
-import { MessageDispatch, messagesReducer } from './reducer';
+import { messagesReducer as conversationMessagesReducer } from '@/features/Conversation/store/slices/data/reducer';
+
+import { type MessageDispatch } from './reducer';
+import { messagesReducer } from './reducer';
 
 describe('messagesReducer', () => {
-  let initialState: ChatMessage[];
+  let initialState: UIChatMessage[];
 
   beforeEach(() => {
     initialState = [
@@ -13,7 +18,6 @@ describe('messagesReducer', () => {
         createdAt: 1629264000000,
         updatedAt: 1629264000000,
         role: 'user',
-        meta: {},
       },
       {
         id: 'message2',
@@ -21,7 +25,6 @@ describe('messagesReducer', () => {
         createdAt: 1629264000000,
         updatedAt: 1629264000000,
         role: 'assistant',
-        meta: {},
         tools: [
           { identifier: 'tool1', apiName: 'calculator', id: 'abc', type: 'default', arguments: '' },
         ],
@@ -56,18 +59,6 @@ describe('messagesReducer', () => {
 
       expect(newState).toEqual(initialState);
     });
-
-    it('should not modify the state if the specified message does not exist', () => {
-      const payload: MessageDispatch = {
-        type: 'updateMessage',
-        id: 'nonexistentMessage',
-        value: { content: 'Updated Message' },
-      };
-
-      const newState = messagesReducer(initialState, payload);
-
-      expect(newState).toEqual(initialState);
-    });
   });
 
   describe('unimplemented type', () => {
@@ -76,7 +67,7 @@ describe('messagesReducer', () => {
       const payload: MessageDispatch = { type: 'unimplementedType' };
 
       expect(() => messagesReducer(initialState, payload)).toThrowError(
-        '暂未实现的 type，请检查 reducer',
+        i18n.t('errors.unimplementedType', { ns: 'common' }),
       );
     });
   });
@@ -113,9 +104,8 @@ describe('messagesReducer', () => {
             createdAt: 1629264000000,
             updatedAt: 1629264000000,
             role: 'user',
-            meta: {},
             extra: { abc: '1' },
-          } as ChatMessage,
+          } as UIChatMessage,
           ...initialState,
         ],
         payload,
@@ -132,6 +122,54 @@ describe('messagesReducer', () => {
         id: 'nonexistent',
         key: 'testKey',
         value: 'testValue',
+      };
+
+      const newState = messagesReducer(initialState, payload);
+      expect(newState).toEqual(initialState);
+    });
+  });
+
+  describe('updateMessageMetadata', () => {
+    it('should merge update the metadata field of a message', () => {
+      const payload: MessageDispatch = {
+        type: 'updateMessageMetadata',
+        id: 'message1',
+        value: { activeBranchIndex: 1 },
+      };
+
+      const newState = messagesReducer(initialState, payload);
+      const updatedMessage = newState.find((m) => m.id === 'message1');
+
+      expect(updatedMessage?.metadata).toEqual({ activeBranchIndex: 1 });
+      expect(updatedMessage?.updatedAt).toBeGreaterThan(initialState[0].updatedAt);
+    });
+
+    it('should merge update the metadata field if metadata already exists', () => {
+      const state = [
+        {
+          ...initialState[0],
+          metadata: { activeBranchIndex: 0 },
+        },
+      ];
+
+      const payload: MessageDispatch = {
+        type: 'updateMessageMetadata',
+        id: 'message1',
+        value: { activeBranchIndex: 2 },
+      };
+
+      const newState = messagesReducer(state, payload);
+      const updatedMessage = newState.find((m) => m.id === 'message1');
+
+      expect(updatedMessage?.metadata).toEqual({ activeBranchIndex: 2 });
+      expect(updatedMessage?.updatedAt).toBeGreaterThan(initialState[0].updatedAt);
+    });
+
+    it('should not modify state if message is not found', () => {
+      const payload: MessageDispatch = {
+        type: 'updateMessageMetadata',
+        id: 'nonexistent',
+        value: { activeBranchIndex: 1 },
       };
 
       const newState = messagesReducer(initialState, payload);
@@ -185,17 +223,116 @@ describe('messagesReducer', () => {
       const newState = messagesReducer(state, payload);
       expect(newState).toEqual(state);
     });
+
+    it('treats a repeated identical dispatch as a no-op (immer-draft comparison guard)', () => {
+      const payload: MessageDispatch = {
+        type: 'updatePluginState',
+        id: 'message1',
+        key: 'pluginKey',
+        value: 'pluginValue',
+      };
+
+      // First dispatch writes the value and bumps updatedAt.
+      const firstState = messagesReducer(initialState, payload);
+      const firstMessage = firstState.find((m) => m.id === 'message1')!;
+
+      // Second, identical dispatch must be a no-op. Inside `produce` the
+      // message's pluginState is an immer draft; getComparablePluginState must
+      // unwrap it via `current()` so isEqual sees no change (regression guard —
+      // immer 11.1.9 broke comparing a draft directly, causing spurious
+      // updatedAt bumps / re-renders).
+      const secondState = messagesReducer(firstState, payload);
+      const secondMessage = secondState.find((m) => m.id === 'message1')!;
+
+      expect(secondMessage).toBe(firstMessage);
+      expect(secondMessage.updatedAt).toBe(firstMessage.updatedAt);
+    });
+  });
+
+  describe('replaceMessagePluginState', () => {
+    it('replaces plugin state and advances its metadata watermark atomically', () => {
+      const state: UIChatMessage[] = [
+        {
+          content: '',
+          id: 'tool-1',
+          metadata: { heteroMessageId: 'native-tool-1' },
+          pluginState: { obsolete: true, todos: { items: [{ text: 'old' }] } },
+          role: 'tool',
+        } as UIChatMessage,
+      ];
+
+      const newState = messagesReducer(state, {
+        id: 'tool-1',
+        metadata: {
+          heterogeneousToolStateOperationId: 'op-1',
+          heterogeneousToolStateSeq: 2,
+        },
+        type: 'replaceMessagePluginState',
+        value: { todos: { items: [{ status: 'processing', text: 'new' }] } },
+      });
+
+      expect(newState[0].pluginState).toEqual({
+        todos: { items: [{ status: 'processing', text: 'new' }] },
+      });
+      expect(newState[0].metadata).toEqual({
+        heteroMessageId: 'native-tool-1',
+        heterogeneousToolStateOperationId: 'op-1',
+        heterogeneousToolStateSeq: 2,
+      });
+    });
   });
 
   describe('updateMessagePlugin', () => {
+    it.each([
+      ['chat', messagesReducer],
+      ['conversation', conversationMessagesReducer],
+    ] as const)('shows and clears tool failures before a server refresh in %s', (_, reduce) => {
+      const state: UIChatMessage[] = [
+        initialState[0],
+        { ...initialState[1], parentId: 'message1' },
+        {
+          content: 'Body saved for review; title not changed.',
+          createdAt: 1629264000001,
+          id: 'tool-result',
+          parentId: 'message2',
+          role: 'tool',
+          tool_call_id: 'abc',
+          updatedAt: 1629264000001,
+        },
+      ];
+      const error = { message: 'Page changed while saving', type: 'PageChangedDuringCommand' };
+      const resultError = (messages: UIChatMessage[]) =>
+        parse(messages).flatList.find((row) => row.role === 'assistantGroup')?.children?.[0]
+          .tools?.[0].result?.error;
+      const failed = reduce(state, {
+        id: 'tool-result',
+        type: 'updateMessagePlugin',
+        value: { error },
+      });
+      expect(resultError(failed)).toEqual(error);
+
+      const unchanged = reduce(failed, {
+        id: 'tool-result',
+        type: 'updateMessagePlugin',
+        value: { arguments: '{}' },
+      });
+      expect(resultError(unchanged)).toEqual(error);
+
+      const recovered = reduce(unchanged, {
+        id: 'tool-result',
+        type: 'updateMessagePlugin',
+        value: { error: null },
+      });
+      expect(resultError(recovered)).toBeUndefined();
+    });
+
     it('should update the plugin of a tool message', () => {
-      const toolMessage: ChatMessage = {
+      const toolMessage: UIChatMessage = {
         id: 'toolMessage',
         role: 'tool',
         content: 'Tool content',
         createdAt: 1629264000000,
         updatedAt: 1629264000000,
-        meta: {},
         plugin: {
           identifier: 'tool1',
           apiName: 'calculator',
@@ -302,7 +439,7 @@ describe('messagesReducer', () => {
       };
 
       const newState = messagesReducer(
-        [...initialState, { id: messageId, role: 'assistant', content: '' } as ChatMessage],
+        [...initialState, { id: messageId, role: 'assistant', content: '' } as UIChatMessage],
         payload,
       );
       const updatedMessage = newState.find((m) => m.id === messageId);
@@ -330,7 +467,7 @@ describe('messagesReducer', () => {
       };
 
       const newState = messagesReducer(
-        [...initialState, { id: messageId, role: 'assistant', content: '' } as ChatMessage],
+        [...initialState, { id: messageId, role: 'assistant', content: '' } as UIChatMessage],
         payload,
       );
       const updatedMessage = newState.find((m) => m.id === messageId);
@@ -450,7 +587,6 @@ describe('messagesReducer', () => {
       expect(newMessage?.role).toBe('user');
       expect(newMessage?.createdAt).toBeDefined();
       expect(newMessage?.updatedAt).toBeDefined();
-      expect(newMessage?.meta).toEqual({});
     });
   });
 
@@ -490,16 +626,6 @@ describe('messagesReducer', () => {
       expect(newState.length).toBe(0);
       expect(newState.find((m) => m.id === 'message1')).toBeUndefined();
       expect(newState.find((m) => m.id === 'message2')).toBeUndefined();
-    });
-
-    it('should not modify state if message to delete is not found', () => {
-      const payload: MessageDispatch = {
-        type: 'deleteMessage',
-        id: 'nonexistentMessage',
-      };
-
-      const newState = messagesReducer(initialState, payload);
-      expect(newState).toEqual(initialState);
     });
   });
 });

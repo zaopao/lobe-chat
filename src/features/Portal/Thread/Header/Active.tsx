@@ -1,40 +1,66 @@
-import { Icon } from '@lobehub/ui';
-import { Typography } from 'antd';
-import { useTheme } from 'antd-style';
+import { resolveCCSubagentType } from '@lobechat/builtin-tool-claude-code/client';
+import { agentDisplayName } from '@lobechat/types';
+import { cssVar, Flexbox, Icon, Tag, Text } from '@lobehub/ui';
 import isEqual from 'fast-deep-equal';
-import { ListTree } from 'lucide-react';
 import { memo } from 'react';
-import { Flexbox } from 'react-layout-kit';
 
+import AgentAvatar from '@/components/AgentAvatar';
 import BubblesLoading from '@/components/BubblesLoading';
 import { LOADING_FLAT } from '@/const/message';
+import { useAgentStore } from '@/store/agent';
+import { agentSelectors } from '@/store/agent/selectors';
 import { useChatStore } from '@/store/chat';
 import { portalThreadSelectors } from '@/store/chat/selectors';
 import { oneLineEllipsis } from '@/styles';
 
 const Active = memo(() => {
-  const theme = useTheme();
   const currentThread = useChatStore(portalThreadSelectors.portalCurrentThread, isEqual);
+  const agentMeta = useAgentStore(agentSelectors.getAgentMetaById(currentThread?.agentId || ''));
+
+  if (!currentThread) return null;
+
+  // Subagent spawn → show the specific template (e.g. "Explore",
+  // "General purpose") as a chip next to the title. Sidebar only marks
+  // "Subagent" generically; the header is where the detail belongs.
+  const subagentTypeInfo = resolveCCSubagentType(currentThread.metadata?.subagentType);
 
   return (
-    currentThread && (
-      <Flexbox align={'center'} gap={8} horizontal style={{ marginInlineStart: 4 }}>
-        <Icon color={theme.colorTextSecondary} icon={ListTree} size={18} />
-        <Typography.Text
-          className={oneLineEllipsis}
-          ellipsis={true}
-          style={{ color: theme.colorTextSecondary, fontSize: 14 }}
+    <Flexbox horizontal align={'center'} gap={8} style={{ marginInlineStart: 4 }}>
+      <AgentAvatar
+        agentId={currentThread.agentId}
+        avatar={agentMeta.avatar}
+        background={agentMeta.backgroundColor}
+        name={agentDisplayName(agentMeta)}
+        shape={'circle'}
+        size={24}
+      />
+      <Text
+        className={oneLineEllipsis}
+        ellipsis={true}
+        style={{ color: cssVar.colorTextSecondary, fontSize: 14 }}
+      >
+        {currentThread.title === LOADING_FLAT ? (
+          <Flexbox flex={1} height={30} justify={'center'}>
+            <BubblesLoading />
+          </Flexbox>
+        ) : (
+          currentThread.title
+        )}
+      </Text>
+      {subagentTypeInfo && (
+        <Tag
+          icon={<Icon icon={subagentTypeInfo.icon} />}
+          size={'small'}
+          style={{
+            color: cssVar.colorTextDescription,
+            flexShrink: 0,
+            fontSize: 11,
+          }}
         >
-          {currentThread?.title === LOADING_FLAT ? (
-            <Flexbox flex={1} height={30} justify={'center'}>
-              <BubblesLoading />
-            </Flexbox>
-          ) : (
-            currentThread?.title
-          )}
-        </Typography.Text>
-      </Flexbox>
-    )
+          {subagentTypeInfo.label}
+        </Tag>
+      )}
+    </Flexbox>
   );
 });
 

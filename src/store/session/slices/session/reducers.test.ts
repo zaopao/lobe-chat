@@ -1,10 +1,10 @@
 import { nanoid } from 'nanoid';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { LobeAgentConfig } from '@/types/agent';
-import { LobeAgentSession, LobeSessions } from '@/types/session';
+import { type LobeSessions } from '@/types/session';
 
-import { SessionDispatch, sessionsReducer } from './reducers';
+import { type SessionDispatch } from './reducers';
+import { sessionsReducer } from './reducers';
 
 describe('sessionsReducer', () => {
   const mockSession = {
@@ -35,18 +35,6 @@ describe('sessionsReducer', () => {
       createdAt: expect.any(Date),
       updatedAt: expect.any(Date),
     });
-  });
-
-  it('should remove an existing session', () => {
-    const state: LobeSessions = [mockSession];
-    const removeAction: SessionDispatch = {
-      id: mockSession.id,
-      type: 'removeSession',
-    };
-
-    const newState = sessionsReducer(state, removeAction);
-
-    expect(newState).toHaveLength(0);
   });
 
   it('should update an existing session', () => {

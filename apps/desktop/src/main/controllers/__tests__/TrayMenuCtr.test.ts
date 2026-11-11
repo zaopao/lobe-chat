@@ -1,26 +1,29 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { 
+import type {
   ShowTrayNotificationParams,
+  TrayNavigationSnapshot,
   UpdateTrayIconParams,
-  UpdateTrayTooltipParams
+  UpdateTrayTooltipParams,
 } from '@lobechat/electron-client-ipc';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { App } from '@/core/App';
 
-// 模拟 logger
-vi.mock('@/utils/logger', () => ({
-  createLogger: () => ({
-    debug: vi.fn(),
-    error: vi.fn(),
-  }),
-}));
-
 import TrayMenuCtr from '../TrayMenuCtr';
 
-// 保存原始平台，确保测试结束后能恢复
+const { ipcMainHandleMock } = vi.hoisted(() => ({
+  ipcMainHandleMock: vi.fn(),
+}));
+
+vi.mock('electron', () => ({
+  ipcMain: {
+    handle: ipcMainHandleMock,
+  },
+}));
+
+// Save the original platform to restore after all tests complete
 const originalPlatform = process.platform;
 
-// 模拟 App 及其依赖项
+// Mock App and its dependencies
 const mockToggleVisible = vi.fn();
 const mockGetMainWindow = vi.fn(() => ({
   toggleVisible: mockToggleVisible,
@@ -30,13 +33,23 @@ const mockDisplayBalloon = vi.fn();
 const mockUpdateIcon = vi.fn();
 const mockUpdateTooltip = vi.fn();
 const mockGetMainTray = vi.fn();
+const mockSetAppTrayVisible = vi.fn();
+const mockUpdateNavigationSnapshot = vi.fn();
+const mockStoreGet = vi.fn(() => true);
+const mockStoreSet = vi.fn();
 
 const mockApp = {
   browserManager: {
     getMainWindow: mockGetMainWindow,
   },
+  storeManager: {
+    get: mockStoreGet,
+    set: mockStoreSet,
+  },
   trayManager: {
     getMainTray: mockGetMainTray,
+    setAppTrayVisible: mockSetAppTrayVisible,
+    updateNavigationSnapshot: mockUpdateNavigationSnapshot,
   },
 } as unknown as App;
 
@@ -45,14 +58,52 @@ describe('TrayMenuCtr', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    // 为每个测试重置 mockedTray
+    ipcMainHandleMock.mockClear();
+    // Reset mockedTray for each test
     mockGetMainTray.mockReset();
+    mockStoreGet.mockReturnValue(true);
     trayMenuCtr = new TrayMenuCtr(mockApp);
   });
 
-  // 在所有测试完成后恢复平台设置
+  describe('getAppTrayVisible', () => {
+    it('should return stored app tray visibility', () => {
+      mockStoreGet.mockReturnValue(false);
+
+      const result = trayMenuCtr.getAppTrayVisible();
+
+      expect(mockStoreGet).toHaveBeenCalledWith('appTrayVisible', true);
+      expect(result).toBe(false);
+    });
+  });
+
+  describe('setAppTrayVisible', () => {
+    it('should persist and apply app tray visibility', () => {
+      const result = trayMenuCtr.setAppTrayVisible(false);
+
+      expect(mockStoreSet).toHaveBeenCalledWith('appTrayVisible', false);
+      expect(mockSetAppTrayVisible).toHaveBeenCalledWith(false);
+      expect(result).toEqual({ success: true });
+    });
+  });
+
+  describe('updateNavigationSnapshot', () => {
+    it('should pass the latest navigation snapshot to the tray manager', () => {
+      const snapshot: TrayNavigationSnapshot = {
+        agents: [{ id: 'agent-1', title: 'Researcher', url: '/agent/agent-1' }],
+        pinned: [{ title: 'Pinned task', url: '/tasks/pinned' }],
+        recent: [{ title: 'Recent page', url: '/page/recent' }],
+      };
+
+      const result = trayMenuCtr.updateNavigationSnapshot(snapshot);
+
+      expect(mockUpdateNavigationSnapshot).toHaveBeenCalledWith(snapshot);
+      expect(result).toEqual({ success: true });
+    });
+  });
+
+  // Restore platform settings after all tests complete
   afterAll(() => {
-    // 恢复原始平台
+    // Restore the original platform
     Object.defineProperty(process, 'platform', { value: originalPlatform });
   });
 
@@ -67,9 +118,9 @@ describe('TrayMenuCtr', () => {
 
   describe('showNotification', () => {
     it('should display balloon notification on Windows platform', async () => {
-      // 模拟 Windows 平台
+      // Mock Windows platform
       Object.defineProperty(process, 'platform', { value: 'win32' });
-      
+
       const mockedTray = {
         displayBalloon: mockDisplayBalloon,
       };
@@ -93,7 +144,7 @@ describe('TrayMenuCtr', () => {
     });
 
     it('should return error when not on Windows platform', async () => {
-      // 模拟非 Windows 平台
+      // Mock non-Windows platform
       Object.defineProperty(process, 'platform', { value: 'darwin' });
 
       const options: ShowTrayNotificationParams = {
@@ -106,13 +157,13 @@ describe('TrayMenuCtr', () => {
       expect(mockGetMainTray).not.toHaveBeenCalled();
       expect(mockDisplayBalloon).not.toHaveBeenCalled();
       expect(result).toEqual({
-        error: '托盘通知仅在 Windows 平台支持',
+        error: 'Tray notifications are only supported on Windows platform',
         success: false,
       });
     });
 
     it('should return error when tray is not available on Windows', async () => {
-      // 模拟 Windows 平台但没有托盘
+      // Mock Windows platform with no tray
       Object.defineProperty(process, 'platform', { value: 'win32' });
       mockGetMainTray.mockReturnValue(null);
 
@@ -125,18 +176,18 @@ describe('TrayMenuCtr', () => {
 
       expect(mockGetMainTray).toHaveBeenCalled();
       expect(mockDisplayBalloon).not.toHaveBeenCalled();
-      expect(result).toEqual({ 
-        error: '托盘通知仅在 Windows 平台支持',
-        success: false
+      expect(result).toEqual({
+        error: 'Tray notifications are only supported on Windows platform',
+        success: false,
       });
     });
   });
 
   describe('updateTrayIcon', () => {
     it('should update tray icon on Windows platform', async () => {
-      // 模拟 Windows 平台
+      // Mock Windows platform
       Object.defineProperty(process, 'platform', { value: 'win32' });
-      
+
       const mockedTray = {
         updateIcon: mockUpdateIcon,
       };
@@ -154,9 +205,9 @@ describe('TrayMenuCtr', () => {
     });
 
     it('should handle errors when updating icon', async () => {
-      // 模拟 Windows 平台
+      // Mock Windows platform
       Object.defineProperty(process, 'platform', { value: 'win32' });
-      
+
       const error = new Error('Failed to update icon');
       const mockedTray = {
         updateIcon: vi.fn().mockImplementation(() => {
@@ -178,7 +229,7 @@ describe('TrayMenuCtr', () => {
     });
 
     it('should return error when not on Windows platform', async () => {
-      // 模拟非 Windows 平台
+      // Mock non-Windows platform
       Object.defineProperty(process, 'platform', { value: 'darwin' });
 
       const options: UpdateTrayIconParams = {
@@ -188,7 +239,7 @@ describe('TrayMenuCtr', () => {
       const result = await trayMenuCtr.updateTrayIcon(options);
 
       expect(result).toEqual({
-        error: '托盘功能仅在 Windows 平台支持',
+        error: 'Tray functionality is only supported on Windows platform',
         success: false,
       });
     });
@@ -196,9 +247,9 @@ describe('TrayMenuCtr', () => {
 
   describe('updateTrayTooltip', () => {
     it('should update tray tooltip on Windows platform', async () => {
-      // 模拟 Windows 平台
+      // Mock Windows platform
       Object.defineProperty(process, 'platform', { value: 'win32' });
-      
+
       const mockedTray = {
         updateTooltip: mockUpdateTooltip,
       };
@@ -216,7 +267,7 @@ describe('TrayMenuCtr', () => {
     });
 
     it('should return error when not on Windows platform', async () => {
-      // 模拟非 Windows 平台
+      // Mock non-Windows platform
       Object.defineProperty(process, 'platform', { value: 'darwin' });
 
       const options: UpdateTrayTooltipParams = {
@@ -226,15 +277,15 @@ describe('TrayMenuCtr', () => {
       const result = await trayMenuCtr.updateTrayTooltip(options);
 
       expect(result).toEqual({
-        error: '托盘功能仅在 Windows 平台支持',
+        error: 'Tray functionality is only supported on Windows platform',
         success: false,
       });
     });
 
     it('should return error when tooltip is not provided', async () => {
-      // 模拟 Windows 平台
+      // Mock Windows platform
       Object.defineProperty(process, 'platform', { value: 'win32' });
-      
+
       const mockedTray = {
         updateTooltip: mockUpdateTooltip,
       };
@@ -248,9 +299,9 @@ describe('TrayMenuCtr', () => {
 
       expect(mockUpdateTooltip).not.toHaveBeenCalled();
       expect(result).toEqual({
-        error: '托盘功能仅在 Windows 平台支持',
+        error: 'Tray functionality is only supported on Windows platform',
         success: false,
       });
     });
   });
-}); 
+});

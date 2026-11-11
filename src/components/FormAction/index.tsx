@@ -1,24 +1,22 @@
-import { Avatar } from '@lobehub/ui';
-import { createStyles } from 'antd-style';
-import { ReactNode, memo } from 'react';
-import { Center, CenterProps, Flexbox } from 'react-layout-kit';
+import { type CenterProps } from '@lobehub/ui';
+import { Avatar, Center, Flexbox } from '@lobehub/ui';
+import { cssVar } from '@lobehub/ui/stylex/cssVar.stylex';
+import * as stylex from '@stylexjs/stylex';
+import { type ReactNode } from 'react';
+import { memo } from 'react';
 
-export const useStyles = createStyles(({ css, token }) => ({
-  container: css`
-    border: 1px solid ${token.colorSplit};
-    border-radius: 8px;
-    color: ${token.colorText};
-    background: ${token.colorBgContainer};
-  `,
-  desc: css`
-    color: ${token.colorTextTertiary};
-    text-align: center;
-  `,
-  form: css`
-    width: 100%;
-    max-width: 300px;
-  `,
-}));
+import { sx } from '@/styles/sx';
+
+const styles = stylex.create({
+  desc: {
+    color: cssVar.colorTextTertiary,
+    textAlign: 'center',
+  },
+  form: {
+    width: '100%',
+    maxWidth: '300px',
+  },
+});
 
 const FormAction = memo<
   {
@@ -40,22 +38,19 @@ const FormAction = memo<
     gap = 16,
     ...rest
   }) => {
-    const { cx, styles, theme } = useStyles();
-
     return (
-      <Center className={cx(styles.form, className)} gap={gap} {...rest}>
+      <Center gap={gap} {...sx([styles.form], className)} {...rest}>
         <Avatar
           animation={animation}
           avatar={avatar}
-          background={background ?? theme.colorFillContent}
-          gap={12}
+          background={background ?? cssVar.colorFillContent}
           size={80}
         />
         <Flexbox gap={8} width={'100%'}>
           <Flexbox style={{ fontSize: 18, fontWeight: 'bold', textAlign: 'center' }}>
             {title}
           </Flexbox>
-          <Flexbox className={styles.desc}>{description}</Flexbox>
+          <Flexbox className={stylex.props(styles.desc).className}>{description}</Flexbox>
         </Flexbox>
         {children}
       </Center>

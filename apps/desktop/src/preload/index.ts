@@ -1,12 +1,16 @@
+import { setupBootProfiler } from './bootProfiler';
 import { setupElectronApi } from './electronApi';
+import { reportLoadingScreenPainted } from './loadingScreenPainted';
 import { setupRouteInterceptors } from './routeInterceptor';
 
 const setupPreload = () => {
+  setupBootProfiler();
+  reportLoadingScreenPainted();
   setupElectronApi();
 
-  // 设置路由拦截逻辑
+  // Setup route interception logic
   window.addEventListener('DOMContentLoaded', () => {
-    // 设置客户端路由拦截器
+    // Setup client-side route interceptor
     setupRouteInterceptors();
   });
 };

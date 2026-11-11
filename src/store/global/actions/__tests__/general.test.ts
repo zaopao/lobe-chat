@@ -1,13 +1,30 @@
-import { act, renderHook } from '@testing-library/react';
-import { ThemeMode } from 'antd-style';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { withSWR } from '~test-utils';
 
+import * as activeWorkspaceSlugModule from '@/business/client/hooks/useActiveWorkspaceSlug';
+import type * as VersionConstants from '@/const/version';
 import { CURRENT_VERSION } from '@/const/version';
 import { globalService } from '@/services/global';
 import { useGlobalStore } from '@/store/global';
 import { initialState } from '@/store/global/initialState';
 import { switchLang } from '@/utils/client/switchLang';
+import { withSWR } from '~test-utils';
+
+const versionContext = vi.hoisted(() => ({ desktop: false, webVersion: '2.2.14' }));
+
+vi.mock('@/const/version', async (importOriginal) => ({
+  ...(await importOriginal<typeof VersionConstants>()),
+  CURRENT_VERSION: '2.2.14',
+  get isDesktop() {
+    return versionContext.desktop;
+  },
+}));
+
+vi.mock('@/const/appVersion', () => ({
+  get WEB_APP_VERSION() {
+    return versionContext.webVersion;
+  },
+}));
 
 vi.mock('@/utils/client/switchLang', () => ({
   switchLang: vi.fn(),
@@ -22,6 +39,8 @@ vi.mock('@/services/global', () => ({
 describe('generalActionSlice', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    versionContext.desktop = false;
+    versionContext.webVersion = '2.2.14';
     useGlobalStore.setState(initialState);
   });
 
@@ -34,7 +53,7 @@ describe('generalActionSlice', () => {
       const { result } = renderHook(() => useGlobalStore());
 
       act(() => {
-        result.current.updateSystemStatus({ inputHeight: 200 });
+        result.current.updateSystemStatus({ noWideScreen: false });
       });
 
       expect(result.current.status).toEqual(initialState.status);
@@ -45,10 +64,10 @@ describe('generalActionSlice', () => {
 
       act(() => {
         useGlobalStore.setState({ isStatusInit: true });
-        result.current.updateSystemStatus({ inputHeight: 200 });
+        result.current.updateSystemStatus({ noWideScreen: false });
       });
 
-      expect(result.current.status.inputHeight).toBe(200);
+      expect(result.current.status.noWideScreen).toBe(false);
     });
 
     it('should not update if new status equals current status', () => {
@@ -57,7 +76,7 @@ describe('generalActionSlice', () => {
 
       act(() => {
         useGlobalStore.setState({ isStatusInit: true });
-        result.current.updateSystemStatus({ inputHeight: initialState.status.inputHeight });
+        result.current.updateSystemStatus({ noWideScreen: initialState.status.noWideScreen });
       });
 
       expect(saveToLocalStorageSpy).not.toHaveBeenCalled();
@@ -69,11 +88,26 @@ describe('generalActionSlice', () => {
 
       act(() => {
         useGlobalStore.setState({ isStatusInit: true });
-        result.current.updateSystemStatus({ inputHeight: 300 });
+        result.current.updateSystemStatus({ noWideScreen: false });
       });
 
       expect(saveToLocalStorageSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ inputHeight: 300 }),
+        expect.objectContaining({ noWideScreen: false }),
+      );
+    });
+
+    it('should persist the selected task list view mode', () => {
+      const { result } = renderHook(() => useGlobalStore());
+      const saveToLocalStorageSpy = vi.spyOn(result.current.statusStorage, 'saveToLocalStorage');
+
+      act(() => {
+        useGlobalStore.setState({ isStatusInit: true });
+        result.current.updateSystemStatus({ taskListViewMode: 'kanban' });
+      });
+
+      expect(result.current.status.taskListViewMode).toBe('kanban');
+      expect(saveToLocalStorageSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskListViewMode: 'kanban' }),
       );
     });
 
@@ -117,43 +151,89 @@ describe('generalActionSlice', () => {
     });
   });
 
-  describe('switchThemeMode', () => {
-    it('should update theme mode in system status', () => {
-      const { result } = renderHook(() => useGlobalStore());
-      const themeMode: ThemeMode = 'dark';
+  describe('browser popup routes', () => {
+    it('keeps the active workspace in agent and topic popups', async () => {
+      vi.spyOn(activeWorkspaceSlugModule, 'getActiveWorkspaceSlug').mockReturnValue('team');
+      const open = vi.spyOn(window, 'open').mockImplementation(() => null);
 
-      act(() => {
-        useGlobalStore.setState({ isStatusInit: true });
-        result.current.switchThemeMode(themeMode);
-      });
+      await useGlobalStore.getState().openAgentInNewWindow('agent-1');
+      await useGlobalStore.getState().openTopicInNewWindow('agent-1', 'topic-1');
+      await useGlobalStore.getState().openGroupTopicInNewWindow('group-1', 'topic-1');
 
-      expect(result.current.status.themeMode).toBe(themeMode);
+      expect(open).toHaveBeenNthCalledWith(
+        1,
+        '/team/agent/agent-1',
+        'agent_agent-1',
+        expect.any(String),
+      );
+      expect(open).toHaveBeenNthCalledWith(
+        2,
+        '/team/agent/agent-1/topic-1',
+        'agent_agent-1_topic_topic-1',
+        expect.any(String),
+      );
+      expect(open).toHaveBeenNthCalledWith(
+        3,
+        '/team/group/group-1/topic-1',
+        'group_group-1_topic_topic-1',
+        expect.any(String),
+      );
     });
+  });
 
-    it('should not update theme mode if status is not initialized', () => {
+  describe('useInitSystemStatus', () => {
+    it('should reset transient UI states when loading from localStorage', async () => {
+      const mockStatus = {
+        ...initialState.status,
+        showCommandMenu: true,
+        showHotkeyHelper: true,
+        noWideScreen: false,
+      };
+
       const { result } = renderHook(() => useGlobalStore());
-      const themeMode: ThemeMode = 'dark';
+      const getFromLocalStorageSpy = vi
+        .spyOn(result.current.statusStorage, 'getFromLocalStorage')
+        .mockResolvedValueOnce(mockStatus);
 
-      act(() => {
-        result.current.switchThemeMode(themeMode);
+      const { result: hookResult } = renderHook(() => useGlobalStore().useInitSystemStatus(), {
+        wrapper: withSWR,
       });
 
-      expect(result.current.status.themeMode).toBe(initialState.status.themeMode);
-    });
-
-    it('should handle light theme mode', () => {
-      const { result } = renderHook(() => useGlobalStore());
-
-      act(() => {
-        useGlobalStore.setState({ isStatusInit: true });
-        result.current.switchThemeMode('light');
+      await act(async () => {
+        await hookResult.current.data;
       });
 
-      expect(result.current.status.themeMode).toBe('light');
+      expect(getFromLocalStorageSpy).toHaveBeenCalled();
+      expect(useGlobalStore.getState().isStatusInit).toBe(true);
+      expect(useGlobalStore.getState().status.showCommandMenu).toBe(false);
+      expect(useGlobalStore.getState().status.showHotkeyHelper).toBe(false);
+      expect(useGlobalStore.getState().status.noWideScreen).toBe(false);
     });
   });
 
   describe('useCheckLatestVersion', () => {
+    it.each([
+      { desktop: false, expected: undefined, latest: '2.3.0' },
+      { desktop: false, expected: true, latest: '2.4.0' },
+      { desktop: true, expected: true, latest: '2.3.0' },
+    ])(
+      'compares $latest against the platform version (desktop: $desktop)',
+      async ({ desktop, expected, latest }) => {
+        versionContext.desktop = desktop;
+        versionContext.webVersion = '2.3.0';
+        vi.mocked(globalService.getLatestVersion).mockResolvedValueOnce(latest);
+
+        const { result } = renderHook(() => useGlobalStore().useCheckLatestVersion(), {
+          wrapper: withSWR,
+        });
+
+        await waitFor(() => expect(result.current.data).toBe(latest));
+
+        expect(useGlobalStore.getState().hasNewVersion).toBe(expected);
+        expect(useGlobalStore.getState().latestVersion).toBe(expected ? latest : undefined);
+      },
+    );
+
     it('should not fetch version when check is disabled', () => {
       const getLatestVersionSpy = vi.spyOn(globalService, 'getLatestVersion');
 

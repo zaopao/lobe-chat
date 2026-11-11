@@ -1,61 +1,101 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
+
+import { DEFAULT_FEATURE_FLAGS, mapFeatureFlagsEnvToState } from '@/config/featureFlags';
 
 import { featureFlagsSelectors, serverConfigSelectors } from './selectors';
 import { initServerConfigStore } from './store';
 
-vi.mock('zustand/traditional');
-
 describe('featureFlagsSelectors', () => {
-  it('should return mapped feature flags from store', () => {
+  it('should return feature flags from store', () => {
     const store = initServerConfigStore({
       featureFlags: {
-        language_model_settings: false,
-        edit_agent: false,
+        ...mapFeatureFlagsEnvToState(DEFAULT_FEATURE_FLAGS),
+        isAgentEditable: false,
+        showProvider: true,
+        showMarket: true,
+        showAiImage: true,
       },
     });
 
     const result = featureFlagsSelectors(store.getState());
 
-    expect(result).toEqual({
-      enableWebrtc: false,
-      isAgentEditable: false,
-      enablePlugins: true,
-      showCreateSession: true,
-      showChangelog: true,
-      enableRAGEval: false,
-      showDalle: true,
-      enableKnowledgeBase: true,
-      showLLM: false,
-      showCloudPromotion: false,
-      showOpenAIApiKey: true,
-      hideDocs: false,
-      hideGitHub: false,
-      showOpenAIProxyUrl: true,
-      enableCheckUpdates: true,
-      showWelcomeSuggest: true,
-      enableClerkSignUp: true,
-      showProvider: true,
-      showMarket: true,
-      showPinList: false,
-      enableSTT: true,
-    });
+    expect(result.isAgentEditable).toBe(false);
+    expect(result.showProvider).toBe(true);
+    expect(result.showMarket).toBe(true);
+    expect(result.showAiImage).toBe(true);
   });
 });
 
 describe('serverConfigSelectors', () => {
-  describe('enabledOAuthSSO', () => {
-    it('should return enabledOAuthSSO value from store', () => {
+  describe('enableWorkspace', () => {
+    it('needs both the business deployment and the per-user workspace flag', () => {
+      const state = (enableBusinessFeatures: boolean, enableWorkspace?: boolean) =>
+        initServerConfigStore({
+          featureFlags: { enableWorkspace } as any,
+          serverConfig: { enableBusinessFeatures } as any,
+        }).getState();
+
+      expect(serverConfigSelectors.enableWorkspace(state(true, true))).toBe(true);
+      expect(serverConfigSelectors.enableWorkspace(state(true, false))).toBe(false);
+      expect(serverConfigSelectors.enableWorkspace(state(true))).toBe(false);
+      expect(serverConfigSelectors.enableWorkspace(state(false, true))).toBe(false);
+    });
+  });
+
+  describe('enableDashboard', () => {
+    it('is off by default and on only when the flag resolves to true', () => {
+      expect(serverConfigSelectors.enableDashboard(initServerConfigStore({}).getState())).toBe(
+        false,
+      );
+      const on = initServerConfigStore({
+        featureFlags: {
+          ...mapFeatureFlagsEnvToState({ ...DEFAULT_FEATURE_FLAGS, dashboard: true }),
+        },
+      });
+      expect(serverConfigSelectors.enableDashboard(on.getState())).toBe(true);
+    });
+  });
+
+  describe('enableManagedCloudDevice', () => {
+    it('is off by default and on only when the flag resolves to true', () => {
+      expect(
+        serverConfigSelectors.enableManagedCloudDevice(initServerConfigStore({}).getState()),
+      ).toBe(false);
+      const on = initServerConfigStore({
+        featureFlags: {
+          ...mapFeatureFlagsEnvToState({ ...DEFAULT_FEATURE_FLAGS, managed_cloud_device: true }),
+        },
+      });
+      expect(serverConfigSelectors.enableManagedCloudDevice(on.getState())).toBe(true);
+    });
+  });
+
+  describe('enableGatewayMode', () => {
+    it('should return true when gateway mode is enabled', () => {
       const store = initServerConfigStore({
         serverConfig: {
-          enabledOAuthSSO: true,
-          telemetry: {},
           aiProvider: {},
+          enableGatewayMode: true,
+          telemetry: {},
         },
       });
 
-      const result = serverConfigSelectors.enabledOAuthSSO(store.getState());
+      const result = serverConfigSelectors.enableGatewayMode(store.getState());
 
       expect(result).toBe(true);
+    });
+
+    it('should return false when gateway mode is not defined', () => {
+      const store = initServerConfigStore({
+        serverConfig: {
+          aiProvider: {},
+          telemetry: {},
+        },
+      });
+
+      const result = serverConfigSelectors.enableGatewayMode(store.getState());
+
+      expect(result).toBe(false);
     });
   });
 

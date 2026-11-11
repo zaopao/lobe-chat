@@ -1,83 +1,108 @@
+import { type ImageProps } from '@lobehub/ui';
 import { ActionIcon, Image } from '@lobehub/ui';
-import { createStyles } from 'antd-style';
+import { cssVar } from '@lobehub/ui/stylex/cssVar.stylex';
+import * as stylex from '@stylexjs/stylex';
 import { Trash } from 'lucide-react';
-import { CSSProperties, memo } from 'react';
+import { type CSSProperties } from 'react';
+import { memo } from 'react';
 
 import { usePlatform } from '@/hooks/usePlatform';
+import { sx } from '@/styles/sx';
 
 import { MIN_IMAGE_SIZE } from './style';
 
-const useStyles = createStyles(({ css, token }) => ({
-  deleteButton: css`
-    color: #fff;
-    background: ${token.colorBgMask};
+const styles = stylex.create({
+  deleteButton: {
+    color: '#fff',
+    backgroundColor: { 'default': cssVar.colorBgMask, ':hover': cssVar.colorError },
+    backgroundImage: { 'default': 'none', ':hover': 'none' },
+  },
+  editableImage: {
+    backgroundColor: cssVar.colorBgContainer,
+    backgroundImage: 'none',
+    boxShadow: `0 0 0 1px ${cssVar.colorFill} inset`,
+  },
+  image: { marginBlock: '0' },
+});
 
-    &:hover {
-      background: ${token.colorError};
-    }
-  `,
-  editableImage: css`
-    background: ${token.colorBgContainer};
-    box-shadow: 0 0 0 1px ${token.colorFill} inset;
-  `,
-  image: css`
-    margin-block: 0 !important;
-
-    .ant-image {
-      height: 100% !important;
-
-      img {
-        height: 100% !important;
-      }
-    }
-  `,
-}));
-
-interface FileItemProps {
+interface ImageItemProps {
   alt?: string;
   alwaysShowClose?: boolean;
   className?: string;
   editable?: boolean;
+  height?: number;
   loading?: boolean;
   onClick?: () => void;
   onRemove?: () => void;
+  preview?: ImageProps['preview'];
+  ratio?: number;
   style?: CSSProperties;
   url?: string;
+  width?: number;
 }
 
-const FileItem = memo<FileItemProps>(
-  ({ editable, alt, onRemove, url, loading, alwaysShowClose }) => {
+const ImageItem = memo<ImageItemProps>(
+  ({
+    className,
+    style,
+    editable,
+    alt,
+    onRemove,
+    url,
+    loading,
+    alwaysShowClose,
+    preview,
+    ratio,
+    width,
+    height,
+  }) => {
     const IMAGE_SIZE = editable ? MIN_IMAGE_SIZE : '100%';
-    const { styles, cx } = useStyles();
     const { isSafari } = usePlatform();
+    const aspectRatio =
+      ratio && ratio > 0
+        ? ratio
+        : width && width > 0 && height && height > 0
+          ? width / height
+          : undefined;
 
     return (
       <Image
-        actions={
-          editable && (
-            <ActionIcon
-              className={styles.deleteButton}
-              glass
-              icon={Trash}
-              onClick={(e) => {
-                e.stopPropagation();
-                onRemove?.();
-              }}
-              size={'small'}
-            />
-          )
-        }
         alt={alt || ''}
         alwaysShowActions={alwaysShowClose}
         height={isSafari ? 'auto' : '100%'}
         isLoading={loading}
-        size={IMAGE_SIZE as any}
+        preview={preview}
+        size={IMAGE_SIZE}
         src={url}
-        style={{ height: isSafari ? 'auto' : '100%' }}
-        wrapperClassName={cx(styles.image, editable && styles.editableImage)}
+        actions={
+          editable && (
+            <ActionIcon
+              glass
+              className={stylex.props(styles.deleteButton).className}
+              icon={Trash}
+              size={'small'}
+              onClick={(e) => {
+                e.stopPropagation();
+                onRemove?.();
+              }}
+            />
+          )
+        }
+        classNames={{
+          wrapper: sx([styles.image, editable && styles.editableImage], className).className,
+        }}
+        style={{
+          aspectRatio,
+          height: aspectRatio || isSafari ? 'auto' : '100%',
+          // the grid's min-height and row stretch would push wide images past their ratio, leaving a blank strip
+          alignSelf: aspectRatio ? 'start' : undefined,
+          minHeight: aspectRatio ? 'auto' : undefined,
+          width: '100%',
+          ...style,
+        }}
       />
     );
   },
 );
 
-export default FileItem;
+export default ImageItem;

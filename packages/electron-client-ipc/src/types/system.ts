@@ -1,9 +1,13 @@
 export interface ElectronAppState {
   arch?: string; // e.g., 'x64', 'arm64'
+  /** Human-readable name of the shell that `runCommand` uses (e.g. "PowerShell 7+ (pwsh)"). */
+  defaultShell?: string;
   isLinux?: boolean;
   isMac?: boolean;
   isWindows?: boolean;
-  platform?: 'darwin' | 'win32' | 'linux'; // , etc.
+  locale?: string;
+  platform?: 'darwin' | 'win32' | 'linux';
+  systemAppearance?: string;
   userPath?: UserPathData;
 }
 
@@ -23,4 +27,8 @@ export interface UserPathData {
   videos?: string; // User's home directory
 }
 
-export type ThemeMode = 'auto' | 'dark' | 'light';
+export type ThemeMode = 'system' | 'dark' | 'light';
+export type ThemeAppearance = 'dark' | 'light' | string;
+
+export type GuidedPermission = 'accessibility' | 'fullDisk' | 'inputMonitoring' | 'screen';
+export type PermissionGuideStatus = 'active' | 'dismissed' | 'granted';

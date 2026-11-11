@@ -1,29 +1,34 @@
+import path from 'node:path';
+
 import { app } from 'electron';
-import { join } from 'node:path';
 
-export const mainDir = join(__dirname);
+export const mainDir = path.join(__dirname);
 
-export const preloadDir = join(mainDir, '../preload');
+export const preloadDir = path.join(mainDir, '../preload');
 
-export const resourcesDir = join(mainDir, '../../resources');
+export const resourcesDir = path.join(mainDir, '../../resources');
 
-export const buildDir = join(mainDir, '../../build');
+export const buildDir = path.join(mainDir, '../../build');
 
-const appPath = app.getAppPath();
+export const binDir = app.isPackaged
+  ? path.join(process.resourcesPath, 'bin')
+  : path.join(resourcesDir, 'bin');
 
-export const nextStandaloneDir = join(appPath, 'dist', 'next');
+export const rendererDir = path.join(mainDir, '../renderer');
 
 export const userDataDir = app.getPath('userData');
 
-export const appStorageDir = join(userDataDir, 'lobehub-storage');
+export const appStorageDir = path.join(userDataDir, 'lobehub-storage');
+
+// Legacy local database directory used in older desktop versions
+export const legacyLocalDbDir = path.join(appStorageDir, 'lobehub-local-db');
 
 // ------  Application storage directory ---- //
 
-// db schema hash
-export const DB_SCHEMA_HASH_FILENAME = 'lobehub-local-db-schema-hash';
-// pglite database dir
-export const LOCAL_DATABASE_DIR = 'lobehub-local-db';
-// 本地存储文件（模拟 S3）
+// Local storage files (simulating S3)
 export const FILE_STORAGE_DIR = 'file-storage';
-// Plugin 安装目录
+// Plugin installation directory
 export const INSTALL_PLUGINS_DIR = 'plugins';
+
+// Desktop file service
+export const LOCAL_STORAGE_URL_PREFIX = '/lobe-desktop-file';

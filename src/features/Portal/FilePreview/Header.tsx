@@ -1,36 +1,25 @@
-import { ActionIcon } from '@lobehub/ui';
-import { Skeleton, Typography } from 'antd';
-import { ArrowLeft } from 'lucide-react';
-import { Flexbox } from 'react-layout-kit';
+import { memo } from 'react';
 
-import { useChatStore } from '@/store/chat';
-import { chatPortalSelectors } from '@/store/chat/selectors';
-import { useFileStore } from '@/store/file';
-import { oneLineEllipsis } from '@/styles';
+import ShareButton from '@/business/client/features/FileShare/ShareButton';
 
-const Header = () => {
-  const [closeFilePreview, previewFileId] = useChatStore((s) => [
-    s.closeFilePreview,
-    chatPortalSelectors.previewFileId(s),
-  ]);
+import PortalHeader from '../components/Header';
+import Title from './Title';
+import { usePreviewFileItem } from './usePreviewFileItem';
 
-  const useFetchFileItem = useFileStore((s) => s.useFetchFileItem);
-
-  const { data, isLoading } = useFetchFileItem(previewFileId);
+const Header = memo<{ onClose?: () => void }>(({ onClose }) => {
+  const { data, fromSource } = usePreviewFileItem();
 
   return (
-    <Flexbox align={'center'} gap={4} horizontal>
-      <ActionIcon icon={ArrowLeft} onClick={() => closeFilePreview()} size={'small'} />
-
-      {isLoading ? (
-        <Skeleton.Button active style={{ height: 28 }} />
-      ) : (
-        <Typography.Text className={oneLineEllipsis} style={{ fontSize: 16 }} type={'secondary'}>
-          {data?.name}
-        </Typography.Text>
-      )}
-    </Flexbox>
+    <PortalHeader
+      // A preview opened from a share source is someone else's file; a
+      // document-coalesced item carries a `docs_*` id over the file it wraps.
+      rightExtra={data && !fromSource ? <ShareButton fileId={data.fileId ?? data.id} /> : undefined}
+      title={<Title />}
+      onClose={onClose}
+    />
   );
-};
+});
+
+Header.displayName = 'FilePreviewHeader';
 
 export default Header;

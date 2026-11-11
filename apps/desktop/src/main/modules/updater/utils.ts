@@ -1,33 +1,66 @@
 import semver from 'semver';
 
+const STATIC_ASSET_PATH_PREFIXES = ['/assets/', '/_next/', '/static/'];
+const ROOT_STATIC_FILE_RE = /^\/[^/]+\.[^/]+$/;
+
+const isStaticAssetPath = (pathname: string) =>
+  ROOT_STATIC_FILE_RE.test(pathname) ||
+  STATIC_ASSET_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+
 /**
- * 判断是否需要应用更新而非仅渲染层更新
- * @param currentVersion 当前版本
- * @param nextVersion 新版本
- * @returns 是否需要应用更新
+ * Determine if application update is needed rather than just renderer update
+ * @param currentVersion Current version
+ * @param nextVersion New version
+ * @returns Whether application update is needed
  */
 export const shouldUpdateApp = (currentVersion: string, nextVersion: string): boolean => {
-  // 如果版本号包含 .app 后缀，强制进行应用更新
+  // If version contains .app suffix, force application update
   if (nextVersion.includes('.app')) {
     return true;
   }
 
   try {
-    // 解析版本号
+    // Parse version number
     const current = semver.parse(currentVersion);
     const next = semver.parse(nextVersion);
 
     if (!current || !next) return true;
 
-    // 主版本号或次版本号变更时，需要进行应用更新
+    // Application update needed when major or minor version changes
     if (current.major !== next.major || current.minor !== next.minor) {
       return true;
     }
 
-    // 仅修订版本号变更，优先进行渲染层热更新
+    // For patch version changes only, prioritize renderer hot update
     return false;
   } catch {
-    // 解析失败时，默认进行应用更新
+    // Default to application update when parsing fails
     return true;
   }
+};
+
+/**
+ * Extract a restorable SPA route (`pathname + search`) from a renderer window URL.
+ * Returns `null` when the URL is not a restorable route — splash/error pages
+ * (`file:` protocol), known static asset paths, or the root route (identical
+ * to the default, nothing worth restoring).
+ */
+export const extractRestoreRoute = (rawUrl: string): string | null => {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+
+  if (url.protocol === 'file:') return null;
+  if (isStaticAssetPath(url.pathname)) return null;
+
+  // `lng` is re-appended by Browser.buildUrlWithLocale on the next load
+  url.searchParams.delete('lng');
+
+  const route = `${url.pathname}${url.search}`;
+  if (route === '/' || route === '') return null;
+
+  return route;
 };

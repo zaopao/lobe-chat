@@ -1,24 +1,19 @@
 import { produce } from 'immer';
 
-import { LobeAgentSession, LobeSessions } from '@/types/session';
+import { type LobeSession, type LobeSessions } from '@/types/session';
 
 interface AddSession {
-  session: LobeAgentSession;
+  session: LobeSession;
   type: 'addSession';
-}
-
-interface RemoveSession {
-  id: string;
-  type: 'removeSession';
 }
 
 interface UpdateSession {
   id: string;
   type: 'updateSession';
-  value: Partial<LobeAgentSession>;
+  value: Partial<LobeSession>;
 }
 
-export type SessionDispatch = AddSession | RemoveSession | UpdateSession;
+export type SessionDispatch = AddSession | UpdateSession;
 
 export const sessionsReducer = (state: LobeSessions, payload: SessionDispatch): LobeSessions => {
   switch (payload.type) {
@@ -27,18 +22,9 @@ export const sessionsReducer = (state: LobeSessions, payload: SessionDispatch): 
         const { session } = payload;
         if (!session) return;
 
-        // TODO: 后续将 Date 类型做个迁移，就可以移除这里的 ignore 了
+        // TODO: Migrate Date type in the future to remove this ignore
         // @ts-ignore
         draft.unshift({ ...session, createdAt: new Date(), updatedAt: new Date() });
-      });
-    }
-
-    case 'removeSession': {
-      return produce(state, (draftState) => {
-        const index = draftState.findIndex((item) => item.id === payload.id);
-        if (index !== -1) {
-          draftState.splice(index, 1);
-        }
       });
     }
 

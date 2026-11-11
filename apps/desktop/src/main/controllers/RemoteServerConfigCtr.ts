@@ -1,12 +1,40 @@
-import { DataSyncConfig } from '@lobechat/electron-client-ipc';
-import { safeStorage } from 'electron';
 import querystring from 'node:querystring';
 import { URL } from 'node:url';
 
-import { OFFICIAL_CLOUD_SERVER } from '@/const/env';
-import { createLogger } from '@/utils/logger';
+import type { DataSyncConfig, DesktopBootstrapIdentity } from '@lobechat/electron-client-ipc';
+import { safeStorage, session as electronSession } from 'electron';
 
-import { ControllerModule, ipcClientEvent } from './index';
+import { OFFICIAL_CLOUD_SERVER } from '@/const/env';
+import { refreshAppSignIn, withdrawAppSignIn } from '@/modules/cliEmbedding/appSignInFile';
+import GatewayConnectionService from '@/services/gatewayConnectionSrv';
+import { appendVercelCookie } from '@/utils/http-headers';
+import { createLogger } from '@/utils/logger';
+import { netFetch } from '@/utils/net-fetch';
+import { setDesktopUserAgentHeader } from '@/utils/user-agent';
+
+import { ControllerModule, IpcMethod } from './index';
+
+/**
+ * Non-retryable OIDC error codes
+ * These errors indicate the refresh token is invalid and retry won't help
+ */
+const NON_RETRYABLE_OIDC_ERRORS = [
+  'invalid_grant', // refresh token is invalid, expired, or revoked
+  'invalid_client', // client configuration error
+  'unauthorized_client', // client not authorized
+  'access_denied', // user denied access
+  'invalid_scope', // requested scope is invalid
+];
+
+/**
+ * Deterministic failures that will never succeed on retry
+ * These are permanent state issues that require user intervention
+ */
+const DETERMINISTIC_FAILURES = [
+  'no refresh token available', // refresh token is missing from storage
+  'remote server is not active or configured', // config is invalid or disabled
+  'missing tokens in refresh response', // server returned incomplete response
+];
 
 // Create logger
 const logger = createLogger('controllers:RemoteServerConfigCtr');
@@ -16,32 +44,82 @@ const logger = createLogger('controllers:RemoteServerConfigCtr');
  * Used to manage custom remote LobeChat server configuration
  */
 export default class RemoteServerConfigCtr extends ControllerModule {
+  static override readonly groupName = 'remoteServer';
   /**
    * Key used to store encrypted tokens in electron-store.
    */
   private readonly encryptedTokensKey = 'encryptedTokens';
 
   /**
+   * Normalize legacy config that used local storageMode.
+   * Local mode has been removed; fall back to cloud.
+   * Persistence belongs to explicit configuration updates, not reads.
+   */
+  private normalizeConfig = (config: DataSyncConfig): DataSyncConfig => {
+    // Use type assertion to handle legacy 'local' value from stored data
+    if ((config.storageMode as string) !== 'local') return config;
+
+    return {
+      ...config,
+      remoteServerUrl: config.remoteServerUrl || OFFICIAL_CLOUD_SERVER,
+      storageMode: 'cloud',
+    };
+  };
+
+  /**
    * Get remote server configuration
    */
-  @ipcClientEvent('getRemoteServerConfig')
+  @IpcMethod()
   async getRemoteServerConfig() {
     logger.debug('Getting remote server configuration');
     const { storeManager } = this.app;
 
     const config: DataSyncConfig = storeManager.get('dataSyncConfig');
+    const normalized = this.normalizeConfig(config);
 
     logger.debug(
-      `Remote server config: active=${config.active}, storageMode=${config.storageMode}, url=${config.remoteServerUrl}`,
+      `Remote server config: active=${normalized.active}, storageMode=${normalized.storageMode}, url=${normalized.remoteServerUrl}`,
     );
 
-    return config;
+    return normalized;
+  }
+
+  /**
+   * Check if remote server is properly configured and ready for use
+   * For 'cloud' mode, only checks if active (remoteServerUrl is undefined, uses OFFICIAL_CLOUD_SERVER)
+   * For 'selfHost' mode, checks if active AND remoteServerUrl is configured
+   * @param config Optional config object, if not provided will fetch current config
+   * @returns true if remote server is properly configured
+   */
+  @IpcMethod()
+  async isRemoteServerConfigured(config?: DataSyncConfig): Promise<boolean> {
+    const effectiveConfig = config ?? (await this.getRemoteServerConfig());
+    const isActive = Boolean(effectiveConfig.active);
+    const isSelfHostConfigured =
+      effectiveConfig.storageMode !== 'selfHost' ||
+      this.isValidSelfHostRemoteUrl(effectiveConfig.remoteServerUrl);
+
+    return isActive && isSelfHostConfigured;
+  }
+
+  private isValidSelfHostRemoteUrl(remoteServerUrl?: string): boolean {
+    if (!remoteServerUrl) return false;
+    const normalizedUrl = remoteServerUrl.trim();
+
+    if (!normalizedUrl) return false;
+
+    try {
+      const parsedUrl = new URL(normalizedUrl);
+      return parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:';
+    } catch {
+      return false;
+    }
   }
 
   /**
    * Set remote server configuration
    */
-  @ipcClientEvent('setRemoteServerConfig')
+  @IpcMethod()
   async setRemoteServerConfig(config: Partial<DataSyncConfig>) {
     logger.info(
       `Setting remote server storageMode: active=${config.active}, storageMode=${config.storageMode}, url=${config.remoteServerUrl}`,
@@ -49,8 +127,22 @@ export default class RemoteServerConfigCtr extends ControllerModule {
     const { storeManager } = this.app;
     const prev: DataSyncConfig = storeManager.get('dataSyncConfig');
 
-    // Save configuration
-    storeManager.set('dataSyncConfig', { ...prev, ...config });
+    // Save configuration with legacy local storage fallback
+    const merged = this.normalizeConfig({ ...prev, ...config });
+    storeManager.set('dataSyncConfig', merged);
+
+    // The device gateway connection belongs to the login it was opened for.
+    // Pointing at another server, or deactivating this one, ends that login:
+    // close it and drop whatever was resolved for it before anything reconnects.
+    const [prevServerUrl, nextServerUrl] = await Promise.all([
+      this.getRemoteServerUrl(prev),
+      this.getRemoteServerUrl(merged),
+    ]);
+    if (prevServerUrl !== nextServerUrl || (prev.active && !merged.active)) {
+      await this.app.getService(GatewayConnectionService)?.disconnect();
+    }
+
+    this.broadcastRemoteServerConfigUpdated();
 
     return true;
   }
@@ -58,18 +150,25 @@ export default class RemoteServerConfigCtr extends ControllerModule {
   /**
    * Clear remote server configuration
    */
-  @ipcClientEvent('clearRemoteServerConfig')
+  @IpcMethod()
   async clearRemoteServerConfig() {
     logger.info('Clearing remote server configuration');
     const { storeManager } = this.app;
 
     // Clear instance configuration
-    storeManager.set('dataSyncConfig', { storageMode: 'local' });
+    storeManager.set('dataSyncConfig', { active: false, storageMode: 'cloud' });
 
     // Clear tokens (if any)
     await this.clearTokens();
 
+    this.broadcastRemoteServerConfigUpdated();
+
     return true;
+  }
+
+  private broadcastRemoteServerConfigUpdated() {
+    logger.debug('Broadcasting remoteServerConfigUpdated event to all windows');
+    this.app.browserManager.broadcastToAllWindows('remoteServerConfigUpdated', undefined);
   }
 
   /**
@@ -78,6 +177,49 @@ export default class RemoteServerConfigCtr extends ControllerModule {
    */
   private encryptedAccessToken?: string;
   private encryptedRefreshToken?: string;
+
+  /**
+   * Token expiration time (timestamp in milliseconds)
+   * Used for automatic token refresh
+   */
+  private tokenExpiresAt?: number;
+
+  /**
+   * Last token refresh time (timestamp in milliseconds)
+   * Used to control refresh frequency on app startup/activate
+   */
+  private lastRefreshAt?: number;
+
+  /**
+   * Resolve the cache-partition identity synchronously for the renderer preload.
+   * This deliberately avoids `getUserState()`: the encrypted OIDC token already
+   * contains the stable subject required for local isolation.
+   */
+  getDesktopBootstrapIdentity(): DesktopBootstrapIdentity {
+    if (!this.encryptedAccessToken) this.loadTokensFromStore();
+
+    if (!this.encryptedAccessToken) return { isIdentityResolved: true };
+
+    try {
+      const accessToken = safeStorage.isEncryptionAvailable()
+        ? safeStorage.decryptString(Buffer.from(this.encryptedAccessToken, 'base64'))
+        : this.encryptedAccessToken;
+      const parts = accessToken.split('.');
+      if (parts.length !== 3) return { isIdentityResolved: false };
+
+      const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as {
+        sub?: unknown;
+      };
+      if (typeof payload.sub !== 'string' || payload.sub.length === 0) {
+        return { isIdentityResolved: false };
+      }
+
+      return { isIdentityResolved: true, userId: payload.sub };
+    } catch (error) {
+      logger.warn('Failed to resolve Desktop bootstrap identity from access token:', error);
+      return { isIdentityResolved: false };
+    }
+  }
 
   /**
    * Promise representing the ongoing token refresh operation.
@@ -89,9 +231,22 @@ export default class RemoteServerConfigCtr extends ControllerModule {
    * Encrypt and store tokens
    * @param accessToken Access token
    * @param refreshToken Refresh token
+   * @param expiresIn Token expiration time in seconds (optional)
    */
-  async saveTokens(accessToken: string, refreshToken: string) {
+  async saveTokens(accessToken: string, refreshToken: string, expiresIn?: number) {
     logger.info('Saving encrypted tokens');
+
+    // Calculate expiration time if provided
+    if (expiresIn) {
+      this.tokenExpiresAt = Date.now() + expiresIn * 1000;
+      logger.debug(`Token expires at: ${new Date(this.tokenExpiresAt).toISOString()}`);
+    } else {
+      this.tokenExpiresAt = undefined;
+    }
+
+    // Update last refresh time
+    this.lastRefreshAt = Date.now();
+    logger.debug(`Token last refreshed at: ${new Date(this.lastRefreshAt).toISOString()}`);
 
     // If platform doesn't support secure storage, store raw tokens
     if (!safeStorage.isEncryptionAvailable()) {
@@ -101,8 +256,11 @@ export default class RemoteServerConfigCtr extends ControllerModule {
       // Persist unencrypted tokens (consider security implications)
       this.app.storeManager.set(this.encryptedTokensKey, {
         accessToken: this.encryptedAccessToken,
+        expiresAt: this.tokenExpiresAt,
+        lastRefreshAt: this.lastRefreshAt,
         refreshToken: this.encryptedRefreshToken,
       });
+      this.pushRefreshedAccessToken(accessToken);
       return;
     }
 
@@ -120,8 +278,29 @@ export default class RemoteServerConfigCtr extends ControllerModule {
     logger.debug(`Persisting encrypted tokens to store key: ${this.encryptedTokensKey}`);
     this.app.storeManager.set(this.encryptedTokensKey, {
       accessToken: this.encryptedAccessToken,
+      expiresAt: this.tokenExpiresAt,
+      lastRefreshAt: this.lastRefreshAt,
       refreshToken: this.encryptedRefreshToken,
     });
+
+    this.pushRefreshedAccessToken(accessToken);
+  }
+
+  /**
+   * Hand a freshly stored access token to everything that holds a copy of it:
+   * the live device-gateway socket, and the sign-in file `lh` reads inside
+   * local agent runs (which would otherwise keep the expired token).
+   *
+   * The gateway client caches the token it was constructed with and replays it
+   * on every backoff / heartbeat reconnect, while the token itself is rotated
+   * here (AuthCtr's auto-refresh timer). Without this push the refresh only
+   * became visible after the connection had already been torn down and rejected
+   * — the socket dropped, the client replayed the stale token, and `auth_failed`
+   * left the device offline.
+   */
+  private pushRefreshedAccessToken(accessToken: string) {
+    this.app.getService(GatewayConnectionService)?.updatePersonalToken(accessToken);
+    void refreshAppSignIn(accessToken);
   }
 
   /**
@@ -199,17 +378,72 @@ export default class RemoteServerConfigCtr extends ControllerModule {
     logger.info('Clearing access and refresh tokens');
     this.encryptedAccessToken = undefined;
     this.encryptedRefreshToken = undefined;
+    this.tokenExpiresAt = undefined;
     // Also clear from persistent storage
     logger.debug(`Deleting tokens from store key: ${this.encryptedTokensKey}`);
     this.app.storeManager.delete(this.encryptedTokensKey);
+    // Signed out: agent runs must not keep acting as the previous user.
+    await withdrawAppSignIn();
+
+    // Disconnect gateway when tokens are cleared (logout / token refresh failure)
+    const gatewaySrv = this.app.getService(GatewayConnectionService);
+    if (gatewaySrv) {
+      logger.debug('Disconnecting gateway due to token clear');
+      await gatewaySrv.disconnect();
+    }
   }
 
   /**
-   * 刷新访问令牌
-   * 使用存储的刷新令牌获取新的访问令牌
-   * Handles concurrent requests by returning the existing refresh promise if one is in progress.
+   * Get token expiration time
    */
-  @ipcClientEvent('refreshAccessToken')
+  getTokenExpiresAt(): number | undefined {
+    return this.tokenExpiresAt;
+  }
+
+  /**
+   * Check if token is expired or will expire soon
+   * @param bufferTimeMs Buffer time in milliseconds (default 1 day)
+   * @returns true if token is expired or will expire soon
+   */
+  isTokenExpiringSoon(bufferTimeMs: number = 24 * 60 * 60 * 1000): boolean {
+    if (!this.tokenExpiresAt) {
+      return false; // No expiration time available
+    }
+
+    const currentTime = Date.now();
+    const bufferTime = this.tokenExpiresAt - bufferTimeMs;
+
+    return currentTime >= bufferTime;
+  }
+
+  /**
+   * Check if an error is non-retryable
+   * Includes OIDC errors (e.g., invalid_grant) and deterministic failures
+   * (e.g., missing refresh token, invalid config)
+   * @param error Error message to check
+   * @returns true if the error should not be retried
+   */
+  isNonRetryableError(error?: string): boolean {
+    if (!error) return false;
+    const lowerError = error.toLowerCase();
+
+    // Check OIDC error codes
+    if (NON_RETRYABLE_OIDC_ERRORS.some((code) => lowerError.includes(code))) {
+      return true;
+    }
+
+    // Check deterministic failures that require user intervention
+    if (DETERMINISTIC_FAILURES.some((msg) => lowerError.includes(msg))) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Refresh the access token using the stored refresh token (single attempt).
+   * Concurrent callers share the in-progress refresh promise.
+   */
   async refreshAccessToken(): Promise<{ error?: string; success: boolean }> {
     // If a refresh is already in progress, return the existing promise
     if (this.refreshPromise) {
@@ -217,11 +451,17 @@ export default class RemoteServerConfigCtr extends ControllerModule {
       return this.refreshPromise;
     }
 
-    // Start a new refresh operation
     logger.info('Initiating new token refresh operation.');
-    this.refreshPromise = this.performTokenRefresh();
 
-    // Return the promise so callers can wait
+    // No retry: with refresh token rotation the server consumes the old token as soon
+    // as the request lands. Resending it (e.g. after a lost response) triggers reuse
+    // detection — invalid_grant + revocation of the whole grant — which logs the user
+    // out. Transient failures are recovered by the next refresh cycle instead.
+    this.refreshPromise = this.performTokenRefresh().finally(() => {
+      logger.debug('Clearing the refresh promise reference.');
+      this.refreshPromise = null;
+    });
+
     return this.refreshPromise;
   }
 
@@ -231,27 +471,27 @@ export default class RemoteServerConfigCtr extends ControllerModule {
    */
   private async performTokenRefresh(): Promise<{ error?: string; success: boolean }> {
     try {
-      // 获取配置信息
+      // Get configuration information
       const config = await this.getRemoteServerConfig();
 
-      if (!config.remoteServerUrl || !config.active) {
+      if (!(await this.isRemoteServerConfigured(config))) {
         logger.warn('Remote server not active or configured, skipping refresh.');
-        return { error: '远程服务器未激活或未配置', success: false };
+        return { error: 'Remote server is not active or configured', success: false };
       }
 
-      // 获取刷新令牌
+      // Get refresh token
       const refreshToken = await this.getRefreshToken();
       if (!refreshToken) {
         logger.error('No refresh token available for refresh operation.');
-        return { error: '没有可用的刷新令牌', success: false };
+        return { error: 'No refresh token available', success: false };
       }
 
-      // 构造刷新请求
+      // Construct refresh request
       const remoteUrl = await this.getRemoteServerUrl(config);
 
       const tokenUrl = new URL('/oidc/token', remoteUrl);
 
-      // 构造请求体
+      // Construct request body
       const body = querystring.stringify({
         client_id: 'lobehub-desktop',
         grant_type: 'refresh_token',
@@ -260,47 +500,45 @@ export default class RemoteServerConfigCtr extends ControllerModule {
 
       logger.debug(`Sending token refresh request to ${tokenUrl.toString()}`);
 
-      // 发送请求
-      const response = await fetch(tokenUrl.toString(), {
-        body,
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        method: 'POST',
-      });
+      // Send request
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      };
+      appendVercelCookie(headers);
+      setDesktopUserAgentHeader(headers);
+      const response = await netFetch(tokenUrl.toString(), { body, headers, method: 'POST' });
 
       if (!response.ok) {
-        // 尝试解析错误响应
+        // Try to parse error response
         const errorData = await response.json().catch(() => ({}));
-        const errorMessage = `刷新令牌失败: ${response.status} ${response.statusText} ${
-          errorData.error_description || errorData.error || ''
-        }`.trim();
+        // Keep the OIDC code so AuthCtr can distinguish revoked grants from transient failures.
+        const errorDetail = [errorData.error, errorData.error_description]
+          .filter(Boolean)
+          .join(' ');
+        const errorMessage =
+          `Token refresh failed: ${response.status} ${response.statusText} ${errorDetail}`.trim();
         logger.error(errorMessage, errorData);
         return { error: errorMessage, success: false };
       }
 
-      // 解析响应
+      // Parse response
       const data = await response.json();
 
-      // 检查响应中是否包含必要令牌
+      // Check if response contains necessary tokens
       if (!data.access_token || !data.refresh_token) {
         logger.error('Refresh response missing access_token or refresh_token', data);
-        return { error: '刷新响应中缺少令牌', success: false };
+        return { error: 'Missing tokens in refresh response', success: false };
       }
 
-      // 保存新令牌
+      // Save new tokens
       logger.info('Token refresh successful, saving new tokens.');
-      await this.saveTokens(data.access_token, data.refresh_token);
+      await this.saveTokens(data.access_token, data.refresh_token, data.expires_in);
 
       return { success: true };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error('Exception during token refresh operation:', errorMessage, error);
-      return { error: `刷新令牌时发生异常: ${errorMessage}`, success: false };
-    } finally {
-      // Ensure the promise reference is cleared once the operation completes
-      logger.debug('Clearing the refresh promise reference.');
-      this.refreshPromise = null;
+      return { error: `Exception occurred during token refresh: ${errorMessage}`, success: false };
     }
   }
 
@@ -316,9 +554,28 @@ export default class RemoteServerConfigCtr extends ControllerModule {
       logger.info('Successfully loaded tokens from store into memory.');
       this.encryptedAccessToken = storedTokens.accessToken;
       this.encryptedRefreshToken = storedTokens.refreshToken;
+      this.tokenExpiresAt = storedTokens.expiresAt;
+      this.lastRefreshAt = storedTokens.lastRefreshAt;
+
+      if (this.tokenExpiresAt) {
+        logger.debug(
+          `Loaded token expiration time: ${new Date(this.tokenExpiresAt).toISOString()}`,
+        );
+      }
+      if (this.lastRefreshAt) {
+        logger.debug(`Loaded last refresh time: ${new Date(this.lastRefreshAt).toISOString()}`);
+      }
     } else {
       logger.debug('No valid tokens found in store.');
     }
+  }
+
+  /**
+   * Get the last token refresh time
+   * @returns The timestamp (in milliseconds) of the last token refresh, or undefined if never refreshed
+   */
+  getLastTokenRefreshAt(): number | undefined {
+    return this.lastRefreshAt;
   }
 
   // Initialize by loading tokens from store when the controller is ready
@@ -328,8 +585,44 @@ export default class RemoteServerConfigCtr extends ControllerModule {
   }
 
   async getRemoteServerUrl(config?: DataSyncConfig) {
-    const dataConfig = config ? config : await this.getRemoteServerConfig();
+    const dataConfig = this.normalizeConfig(config ?? (await this.getRemoteServerConfig()));
 
     return dataConfig.storageMode === 'cloud' ? OFFICIAL_CLOUD_SERVER : dataConfig.remoteServerUrl;
+  }
+
+  /**
+   * Setup subscription webview session with OIDC token injection
+   * This configures a webRequest interceptor on the given partition session
+   * to automatically inject the Oidc-Auth token header for official domain requests.
+   * @param params.partition The partition name for the webview session
+   */
+  @IpcMethod()
+  async setupSubscriptionWebviewSession(params: { partition: string }) {
+    const { partition } = params;
+
+    logger.info(`Setting up subscription webview session for partition: ${partition}`);
+
+    const session = electronSession.fromPartition(partition);
+
+    session.webRequest.onBeforeSendHeaders(
+      { urls: [`https://lobehub.com/*`, `https://*.lobehub.com/*`] },
+      async (details, callback) => {
+        const requestHeaders = { ...details.requestHeaders };
+
+        const token = await this.getAccessToken();
+
+        if (token) {
+          requestHeaders['Oidc-Auth'] = token;
+          logger.debug(`Injected Oidc-Auth token for: ${details.url}`);
+        }
+        setDesktopUserAgentHeader(requestHeaders);
+
+        callback({ requestHeaders });
+      },
+    );
+
+    logger.debug(`Subscription webview session setup completed for partition: ${partition}`);
+
+    return { success: true };
   }
 }

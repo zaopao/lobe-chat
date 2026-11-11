@@ -1,25 +1,21 @@
-import { memo, useEffect, useRef } from 'react';
+import { memo } from 'react';
+
+import { InlineHtmlPreview } from '@/components/HtmlPreview';
 
 interface HTMLRendererProps {
+  animated?: boolean;
   height?: string;
   htmlContent: string;
   width?: string;
 }
-const HTMLRenderer = memo<HTMLRendererProps>(({ htmlContent, width = '100%', height = '100%' }) => {
-  const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  useEffect(() => {
-    if (!iframeRef.current) return;
+const HTMLRenderer = memo<HTMLRendererProps>(
+  ({ animated, htmlContent, width = '100%', height = '100%' }) => {
+    return (
+      <InlineHtmlPreview animated={animated} content={htmlContent} height={height} width={width} />
+    );
+  },
+);
 
-    const doc = iframeRef.current.contentDocument;
-    if (!doc) return;
-
-    doc.open();
-    doc.write(htmlContent);
-    doc.close();
-  }, [htmlContent]);
-
-  return <iframe ref={iframeRef} style={{ border: 'none', height, width }} title="html-renderer" />;
-});
-
+/**  Superseded by Canvas (`lobe-canvas`); kept so existing conversations keep rendering. */
 export default HTMLRenderer;

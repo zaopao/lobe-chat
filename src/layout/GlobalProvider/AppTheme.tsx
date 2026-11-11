@@ -1,92 +1,50 @@
 'use client';
 
-import {
-  ConfigProvider,
-  FontLoader,
-  NeutralColors,
-  PrimaryColors,
-  ThemeProvider,
-} from '@lobehub/ui';
-import { ThemeAppearance, createStyles } from 'antd-style';
-import 'antd/dist/reset.css';
-import Image from 'next/image';
-import Link from 'next/link';
-import { ReactNode, memo, useEffect } from 'react';
+import '@lobehub/ui/theme.css';
+import '@lobehub/ui/global.css';
+import '@lobehub/ui/style.css';
+import '@/styles/global.css';
 
-import AntdStaticMethods from '@/components/AntdStaticMethods';
-import {
-  LOBE_THEME_APPEARANCE,
-  LOBE_THEME_NEUTRAL_COLOR,
-  LOBE_THEME_PRIMARY_COLOR,
-} from '@/const/theme';
+import { type NeutralColors, type PrimaryColors } from '@lobehub/ui';
+import { ConfigProvider, FontLoader, setLobeTheme } from '@lobehub/ui';
+import * as stylex from '@stylexjs/stylex';
+import * as m from 'motion/react-m';
+import { type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
+
+import Link from '@/components/Link';
+import { LOBE_THEME_NEUTRAL_COLOR, LOBE_THEME_PRIMARY_COLOR } from '@/const/theme';
+import { getUILocaleAndResources } from '@/libs/getUILocaleAndResources';
+import type { UILocaleResources } from '@/libs/getUILocaleAndResources.utils';
+import { resolveUILocale } from '@/libs/getUILocaleAndResources.utils';
+import Image from '@/libs/next/Image';
 import { useGlobalStore } from '@/store/global';
 import { systemStatusSelectors } from '@/store/global/selectors';
 import { useUserStore } from '@/store/user';
-import { userGeneralSettingsSelectors } from '@/store/user/selectors';
-import { GlobalStyle } from '@/styles';
+import { preferenceSelectors, userGeneralSettingsSelectors } from '@/store/user/selectors';
+import { sx } from '@/styles/sx';
 import { setCookie } from '@/utils/client/cookie';
+import { resolveLang } from '@/utils/client/switchLang';
 
-const useStyles = createStyles(({ css, token }) => ({
-  app: css`
-    position: relative;
+import { resolveFontFamilyOverride } from './fontFamilyOverride';
 
-    overscroll-behavior: none;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-
-    height: 100%;
-    min-height: 100dvh;
-    max-height: 100dvh;
-
-    @media (min-device-width: 576px) {
-      overflow: hidden;
-    }
-  `,
-  // scrollbar-width and scrollbar-color are supported from Chrome 121
-  // https://developer.mozilla.org/en-US/docs/Web/CSS/scrollbar-color
-  scrollbar: css`
-    scrollbar-color: ${token.colorFill} transparent;
-    scrollbar-width: thin;
-
-    #lobe-mobile-scroll-container {
-      scrollbar-width: none;
-
-      ::-webkit-scrollbar {
-        width: 0;
-        height: 0;
-      }
-    }
-  `,
-
-  // so this is a polyfill for older browsers
-  scrollbarPolyfill: css`
-    ::-webkit-scrollbar {
-      width: 0.75em;
-      height: 0.75em;
-    }
-
-    ::-webkit-scrollbar-thumb {
-      border-radius: 10px;
-    }
-
-    :hover::-webkit-scrollbar-thumb {
-      border: 3px solid transparent;
-      background-color: ${token.colorText};
-      background-clip: content-box;
-    }
-
-    ::-webkit-scrollbar-track {
-      background-color: transparent;
-    }
-  `,
-}));
+const styles = stylex.create({
+  app: {
+    position: 'relative',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    height: '100%',
+    minHeight: '100dvh',
+    maxHeight: '100dvh',
+    overflow: { 'default': null, '@media (min-device-width: 576px)': 'hidden' },
+  },
+});
 
 export interface AppThemeProps {
   children?: ReactNode;
   customFontFamily?: string;
   customFontURL?: string;
-  defaultAppearance?: ThemeAppearance;
   defaultNeutralColor?: NeutralColors;
   defaultPrimaryColor?: PrimaryColors;
   globalCDN?: boolean;
@@ -95,67 +53,98 @@ export interface AppThemeProps {
 const AppTheme = memo<AppThemeProps>(
   ({
     children,
-    defaultAppearance,
     defaultPrimaryColor,
     defaultNeutralColor,
     globalCDN,
     customFontURL,
     customFontFamily,
   }) => {
-    // console.debug('server:appearance', defaultAppearance);
-    // console.debug('server:primaryColor', defaultPrimaryColor);
-    // console.debug('server:neutralColor', defaultNeutralColor);
-    const themeMode = useGlobalStore(systemStatusSelectors.themeMode);
-    const { styles, cx, theme } = useStyles();
-    const [primaryColor, neutralColor] = useUserStore((s) => [
+    const language = useGlobalStore(systemStatusSelectors.language);
+    const [primaryColor, neutralColor, fontAntialiasing] = useUserStore((s) => [
       userGeneralSettingsSelectors.primaryColor(s),
       userGeneralSettingsSelectors.neutralColor(s),
+      userGeneralSettingsSelectors.fontAntialiasing(s),
     ]);
+    const [userFontFamily, userFontFamilyCode] = useUserStore((s) => [
+      preferenceSelectors.fontFamily(s),
+      preferenceSelectors.terminalFontFamily(s),
+    ]);
+    const { fontFamily, fontFamilyCode } = useMemo(
+      () =>
+        resolveFontFamilyOverride({
+          customFontFamily,
+          locale: resolveLang(language),
+          userFontFamily,
+          userFontFamilyCode,
+        }),
+      [customFontFamily, language, userFontFamily, userFontFamilyCode],
+    );
+    const [uiResources, setUIResources] = useState<UILocaleResources>();
+    const [uiLocale, setUILocale] = useState(() => resolveUILocale(language).uiLocale);
+
+    useEffect(() => {
+      let mounted = true;
+      setUILocale(resolveUILocale(language).uiLocale);
+      getUILocaleAndResources(language)
+        .then(({ locale, resources }) => {
+          if (mounted) {
+            setUILocale(locale);
+            setUIResources(resources);
+          }
+        })
+        .catch((error) => {
+          console.error('Failed to load UI locale resources:', error);
+        });
+      return () => {
+        mounted = false;
+      };
+    }, [language]);
 
     useEffect(() => {
       setCookie(LOBE_THEME_PRIMARY_COLOR, primaryColor);
     }, [primaryColor]);
 
     useEffect(() => {
+      setLobeTheme({
+        neutralColor: neutralColor ?? defaultNeutralColor,
+        primaryColor: primaryColor ?? defaultPrimaryColor,
+      });
+    }, [primaryColor, neutralColor, defaultPrimaryColor, defaultNeutralColor]);
+
+    useEffect(() => {
+      const { style } = document.documentElement;
+      if (fontFamily) style.setProperty('--lobe-font-family', fontFamily);
+      else style.removeProperty('--lobe-font-family');
+      if (fontFamilyCode) style.setProperty('--lobe-font-family-code', fontFamilyCode);
+      else style.removeProperty('--lobe-font-family-code');
+    }, [fontFamily, fontFamilyCode]);
+
+    useEffect(() => {
       setCookie(LOBE_THEME_NEUTRAL_COLOR, neutralColor);
     }, [neutralColor]);
 
-    return (
-      <ThemeProvider
-        appearance={themeMode !== 'auto' ? themeMode : undefined}
-        className={cx(styles.app, styles.scrollbar, styles.scrollbarPolyfill)}
-        customTheme={{
-          neutralColor: neutralColor ?? defaultNeutralColor,
-          primaryColor: primaryColor ?? defaultPrimaryColor,
-        }}
-        defaultAppearance={defaultAppearance}
-        onAppearanceChange={(appearance) => {
-          if (themeMode !== 'auto') return;
+    useEffect(() => {
+      if (fontAntialiasing) delete document.documentElement.dataset.fontAntialiasing;
+      else document.documentElement.dataset.fontAntialiasing = 'off';
+    }, [fontAntialiasing]);
 
-          setCookie(LOBE_THEME_APPEARANCE, appearance);
+    return (
+      <ConfigProvider
+        locale={uiLocale}
+        motion={m}
+        resources={uiResources}
+        config={{
+          aAs: Link,
+          imgAs: Image,
+          imgUnoptimized: true,
+          proxy: globalCDN ? 'unpkg' : undefined,
         }}
-        theme={{
-          cssVar: true,
-          token: {
-            fontFamily: customFontFamily ? `${customFontFamily},${theme.fontFamily}` : undefined,
-          },
-        }}
-        themeMode={themeMode}
       >
-        {!!customFontURL && <FontLoader url={customFontURL} />}
-        <GlobalStyle />
-        <AntdStaticMethods />
-        <ConfigProvider
-          config={{
-            aAs: Link,
-            imgAs: Image,
-            imgUnoptimized: true,
-            proxy: globalCDN ? 'unpkg' : undefined,
-          }}
-        >
+        <div {...sx(styles.app)}>
+          {!!customFontURL && <FontLoader url={customFontURL} />}
           {children}
-        </ConfigProvider>
-      </ThemeProvider>
+        </div>
+      </ConfigProvider>
     );
   },
 );

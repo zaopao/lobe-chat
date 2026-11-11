@@ -1,98 +1,104 @@
+import { siteReviewFromResource } from '@lobechat/const';
+import type { LobeChatDatabase } from '@lobechat/database';
 import debug from 'debug';
-import Provider, { Configuration, KoaContextWithOIDC } from 'oidc-provider';
+import type { Configuration, KoaContextWithOIDC } from 'oidc-provider';
+import Provider, { errors } from 'oidc-provider';
 import urlJoin from 'url-join';
 
-import { serverDBEnv } from '@/config/db';
 import { UserModel } from '@/database/models/user';
-import { LobeChatDatabase } from '@/database/type';
 import { appEnv } from '@/envs/app';
-import { oidcEnv } from '@/envs/oidc';
+import { getJWKS } from '@/libs/oidc-provider/jwt';
+import { OIDC_ISSUER_PATH, OIDC_ROUTES } from '@/libs/oidc-provider/routes';
+import { normalizeLocale } from '@/locales/resources';
+import { findSiteForOrigin } from '@/server/services/projectReview/sites';
 
+import {
+  accessTokenTTL,
+  defaultResourceFor,
+  extensionCorsDecision,
+  extensionResourceServer,
+  isAcceptanceReviewClient,
+  reviewResourceServer,
+} from './acceptanceReview';
+import { isOIDCUserBanned } from './access-control';
 import { DrizzleAdapter } from './adapter';
+import { stampClientLastUsed } from './clientLastUsed';
 import { defaultClaims, defaultClients, defaultScopes } from './config';
+import { getOIDCCookieKeys } from './cookies';
 import { createInteractionPolicy } from './interaction-policy';
 
-const logProvider = debug('lobe-oidc:provider'); // <--- 添加 provider 日志实例
+const logProvider = debug('lobe-oidc:provider');
+
+export const API_AUDIENCE = 'urn:lobehub:chat';
+
+const MINUTE_SECONDS = 60;
+const HOUR_SECONDS = 60 * MINUTE_SECONDS;
+const DAY_SECONDS = 24 * HOUR_SECONDS;
+
+// Keep all artifact TTLs explicit; oidc-provider validates its default TTL functions at runtime.
+export const oidcArtifactTTL = {
+  AccessToken: 7 * DAY_SECONDS,
+  AuthorizationCode: 10 * MINUTE_SECONDS,
+  BackchannelAuthenticationRequest: 10 * MINUTE_SECONDS,
+  ClientCredentials: 10 * MINUTE_SECONDS,
+  DeviceCode: 10 * MINUTE_SECONDS,
+  /**
+   * A grant is the standing record of "this account authorised this client". oidc-provider
+   * checks `grant.isExpired` on every refresh but never extends `Grant.exp`, so any finite
+   * value here caps a signed-in session however active it is: the library's 14-day default
+   * logged every client out a fortnight after login while its refresh token still sat unused
+   * and unexpired. Inactivity is already expressed by `RefreshToken`, whose TTL restarts on
+   * each rotation, so a grant carries no deadline of its own. `ttl` entries do accept
+   * `undefined`, but the configuration merge drops undefined values, so "never" has to be
+   * spelled as a century.
+   */
+  Grant: 100 * 365 * DAY_SECONDS,
+  IdToken: HOUR_SECONDS,
+  Interaction: HOUR_SECONDS,
+  RefreshToken: 30 * DAY_SECONDS,
+  Session: 30 * DAY_SECONDS,
+} satisfies NonNullable<Configuration['ttl']>;
 
 /**
- * 从环境变量中获取 JWKS
- * 该 JWKS 是一个包含 RS256 私钥的 JSON 对象
- */
-const getJWKS = (): object => {
-  try {
-    const jwksString = oidcEnv.OIDC_JWKS_KEY;
-
-    if (!jwksString) {
-      throw new Error(
-        'OIDC_JWKS_KEY 环境变量是必需的。请使用 scripts/generate-oidc-jwk.mjs 生成 JWKS。',
-      );
-    }
-
-    // 尝试解析 JWKS JSON 字符串
-    const jwks = JSON.parse(jwksString);
-
-    // 检查 JWKS 格式是否正确
-    if (!jwks.keys || !Array.isArray(jwks.keys) || jwks.keys.length === 0) {
-      throw new Error('JWKS 格式无效: 缺少或为空的 keys 数组');
-    }
-
-    // 检查是否有 RS256 算法的密钥
-    const hasRS256Key = jwks.keys.some((key: any) => key.alg === 'RS256' && key.kty === 'RSA');
-    if (!hasRS256Key) {
-      throw new Error('JWKS 中没有找到 RS256 算法的 RSA 密钥');
-    }
-
-    return jwks;
-  } catch (error) {
-    console.error('解析 JWKS 失败:', error);
-    throw new Error(`OIDC_JWKS_KEY 解析错误: ${(error as Error).message}`);
-  }
-};
-
-/**
- * 获取 Cookie 密钥，使用 KEY_VAULTS_SECRET
- */
-const getCookieKeys = () => {
-  const key = serverDBEnv.KEY_VAULTS_SECRET;
-  if (!key) {
-    throw new Error('KEY_VAULTS_SECRET is required for OIDC Provider cookie encryption');
-  }
-  return [key];
-};
-
-/**
- * 创建 OIDC Provider 实例
- * @param db - 数据库实例
- * @returns 配置好的 OIDC Provider 实例
+ * Create OIDC Provider instance
+ * @param db - Database instance
+ * @returns Configured OIDC Provider instance
  */
 export const createOIDCProvider = async (db: LobeChatDatabase): Promise<Provider> => {
-  // 获取 JWKS
+  // Get JWKS
   const jwks = getJWKS();
 
-  const cookieKeys = getCookieKeys();
+  const cookieKeys = getOIDCCookieKeys();
 
   const configuration: Configuration = {
-    // 11. 数据库适配器
+    // 11. Database adapter
     adapter: DrizzleAdapter.createAdapterFactory(db),
 
-    // 4. Claims 定义
+    // 4. Claims definition
     claims: defaultClaims,
 
-    // 新增：客户端 CORS 控制逻辑
+    // Added: client-based CORS control logic
     clientBasedCORS(ctx, origin, client) {
-      // 检查客户端是否允许此来源
-      // 一个常见的策略是允许所有已注册的 redirect_uris 的来源
+      // The acceptance toolbar runs on whatever origin the delivered product is
+      // previewed on; its token is scoped to one acceptance by audience.
+      if (isAcceptanceReviewClient(client?.clientId)) return true;
+
+      const extension = extensionCorsDecision(client?.clientId, origin);
+      if (extension !== null) return extension;
+
+      // Check if the client allows this origin
+      // A common strategy is to allow origins of all registered redirect_uris
       if (!client || !client.redirectUris) {
         logProvider('clientBasedCORS: No client or redirectUris found, denying origin: %s', origin);
-        return false; // 如果没有客户端或重定向URI，则拒绝
+        return false; // Deny if no client or redirect URIs
       }
 
       const allowed = client.redirectUris.some((uri) => {
         try {
-          // 比较来源 (scheme, hostname, port)
+          // Compare origins (scheme, hostname, port)
           return new URL(uri).origin === origin;
         } catch {
-          // 如果 redirect_uri 不是有效的 URL (例如自定义协议)，则跳过
+          // Skip if redirect_uri is not a valid URL (e.g. custom protocol)
           return false;
         }
       });
@@ -106,42 +112,111 @@ export const createOIDCProvider = async (db: LobeChatDatabase): Promise<Provider
       return allowed;
     },
 
-    // 1. 客户端配置
+    // 1. Client configuration
     clients: defaultClients,
 
-    // 7. Cookie 配置
+    // Added: ensure ID Token includes claims for all scopes, not just openid scope
+    conformIdTokenClaims: false,
+
+    // 7. Cookie configuration
     cookies: {
       keys: cookieKeys,
       long: { path: '/', signed: true },
       short: { path: '/', signed: true },
     },
 
-    // 5. 特性配置
+    // 5. Features configuration
     features: {
       backchannelLogout: { enabled: true },
       clientCredentials: { enabled: false },
       devInteractions: { enabled: false },
-      deviceFlow: { enabled: false },
+      deviceFlow: {
+        charset: 'base-20',
+        enabled: true,
+        mask: '****-****',
+        successSource: async (ctx) => {
+          ctx.redirect('/oauth/device/success');
+        },
+        userCodeConfirmSource: async (ctx, form, client, deviceInfo, userCode) => {
+          const xsrf = (ctx.oidc.session as any)?.state?.secret;
+          const params = new URLSearchParams();
+          if (xsrf) params.set('xsrf', xsrf);
+          params.set('user_code', userCode);
+          params.set('client_name', client.clientName || client.clientId);
+          params.set('client_id', client.clientId);
+          ctx.redirect(`/oauth/device/confirm?${params.toString()}`);
+        },
+        userCodeInputSource: async (ctx, form, out, err) => {
+          const xsrf = (ctx.oidc.session as any)?.state?.secret;
+          const params = new URLSearchParams();
+          if (xsrf) params.set('xsrf', xsrf);
+          if (err) {
+            params.set('error', err.message || 'Unknown error');
+            if ((err as any).userCode) params.set('user_code', (err as any).userCode);
+          }
+          ctx.redirect(`/oauth/device?${params.toString()}`);
+        },
+      },
       introspection: { enabled: true },
-      resourceIndicators: { enabled: false },
+      resourceIndicators: {
+        defaultResource: (ctx, client) => defaultResourceFor(client?.clientId, API_AUDIENCE),
+        enabled: true,
+
+        getResourceServerInfo: async (ctx, resourceIndicator) => {
+          logProvider('getResourceServerInfo called with indicator: %s', resourceIndicator); // <-- Add this log line
+          const extension = extensionResourceServer(ctx.oidc.client?.clientId, resourceIndicator);
+          if (extension === 'reject') throw new errors.InvalidTarget();
+          if (extension) return extension;
+          const review = reviewResourceServer(
+            ctx.oidc.client?.clientId,
+            resourceIndicator,
+            ctx.oidc.params?.resource,
+            { grantType: ctx.oidc.params?.grant_type as string | undefined, route: ctx.oidc.route },
+          );
+          if (review === 'reject') throw new errors.InvalidTarget();
+          const site = review ? siteReviewFromResource(resourceIndicator) : undefined;
+          if (site && !(await findSiteForOrigin(db, site.siteId, site.origin))) {
+            throw new errors.InvalidTarget('site is not registered for this origin');
+          }
+          if (review) return review;
+
+          if (resourceIndicator === API_AUDIENCE) {
+            logProvider('Indicator matches API_AUDIENCE, returning JWT config.'); // <-- Add this log line
+            return {
+              accessTokenFormat: 'jwt',
+              audience: API_AUDIENCE,
+              scope: ctx.oidc.client?.scope || 'read',
+            };
+          }
+
+          logProvider('Indicator does not match API_AUDIENCE, throwing InvalidTarget.'); // <-- Add this log line
+          throw new errors.InvalidTarget();
+        },
+        // When a client uses a refresh token to request a new access token without specifying a resource, the authorization server checks all resources included in the original authorization and uses them for the new access token. This provides a convenient way to maintain authorization consistency without requiring the client to re-specify all resources on each refresh.
+        useGrantedResource: () => true,
+      },
       revocation: { enabled: true },
       rpInitiatedLogout: { enabled: true },
       userinfo: { enabled: true },
     },
-    // 10. 账户查找
+    // 10. Account lookup
     async findAccount(ctx: KoaContextWithOIDC, id: string) {
       logProvider('findAccount called for id: %s', id);
 
-      // 检查是否有预先存储的外部账户 ID
-      // @ts-ignore - 自定义属性
+      // Check if there is a pre-stored external account ID
+      // @ts-ignore - Custom property
       const externalAccountId = ctx.externalAccountId;
       if (externalAccountId) {
         logProvider('Found externalAccountId in context: %s', externalAccountId);
       }
 
-      // 确定要查找的账户 ID
-      // 优先级: 1. externalAccountId 2. ctx.oidc.session?.accountId 3. 传入的 id
+      // Determine the account ID to look up
+      // Priority: 1. externalAccountId 2. ctx.oidc.session?.accountId 3. passed-in id
       const accountIdToFind = externalAccountId || ctx.oidc?.session?.accountId || id;
+
+      const clientId = ctx.oidc?.client?.clientId;
+
+      logProvider('OIDC request client id: %s', clientId);
 
       logProvider(
         'Attempting to find account with ID: %s (source: %s)',
@@ -153,7 +228,7 @@ export const createOIDCProvider = async (db: LobeChatDatabase): Promise<Provider
             : 'parameter_id',
       );
 
-      // 如果没有可用的 ID，返回 undefined
+      // Return undefined if no account ID is available
       if (!accountIdToFind) {
         logProvider('findAccount: No account ID available, returning undefined.');
         return undefined;
@@ -169,6 +244,11 @@ export const createOIDCProvider = async (db: LobeChatDatabase): Promise<Provider
 
         if (!user) {
           logProvider('No user found for accountId: %s', accountIdToFind);
+          return undefined;
+        }
+
+        if (isOIDCUserBanned(user)) {
+          logProvider('Account is banned for accountId: %s', accountIdToFind);
           return undefined;
         }
 
@@ -204,72 +284,80 @@ export const createOIDCProvider = async (db: LobeChatDatabase): Promise<Provider
       }
     },
 
-    // 9. 交互策略
+    // 9. Interaction policy
     interactions: {
       policy: createInteractionPolicy(),
       url(ctx, interaction) {
-        // ---> 添加日志 <---
+        // ---> Add logs <---
         logProvider('interactions.url function called');
         logProvider('Interaction details: %O', interaction);
-        const interactionUrl = `/oauth/consent/${interaction.uid}`;
+
+        // Read the ui_locales parameter from the OIDC request (space-separated language priorities)
+        // https://openid.net/specs/openid-connect-core-1_0.html#AuthRequest
+        const uiLocalesRaw = (interaction.params?.ui_locales || ctx.oidc?.params?.ui_locales) as
+          string | undefined;
+
+        let query = '';
+        if (uiLocalesRaw) {
+          // Take the first priority language and normalize it to a site-supported tag
+          const first = uiLocalesRaw.split(/[\s,]+/).find(Boolean);
+          const hl = normalizeLocale(first);
+          query = `?hl=${encodeURIComponent(hl)}`;
+          logProvider('Detected ui_locales=%s -> using hl=%s', uiLocalesRaw, hl);
+        } else {
+          logProvider('No ui_locales provided in authorization request');
+        }
+
+        const interactionUrl = `/oauth/consent/${interaction.uid}${query}`;
         logProvider('Generated interaction URL: %s', interactionUrl);
-        // ---> 添加日志结束 <---
+        // ---> End of added logs <---
         return interactionUrl;
       },
     },
 
-    // 6. 密钥配置 - 使用 RS256 JWKS
+    // 6. Key configuration - using RS256 JWKS
     jwks: jwks as { keys: any[] },
 
-    // 2. PKCE 配置
+    // 2. PKCE configuration
     pkce: {
       required: () => true,
     },
 
-    // 12. 其他配置
+    // 12. Other configuration
+    // Errors the provider will not redirect back to the client with (an
+    // unregistered redirect_uri, an unknown client, malformed parameters) land
+    // on a dedicated page instead of a raw JSON dump. Only the spec-defined
+    // `error` and `error_description` travel along; `state` stays behind.
     renderError: async (ctx, out, error) => {
-      ctx.type = 'html';
-      ctx.body = `
-        <html>
-          <head>
-            <title>LobeHub OIDC Error</title>
-          </head>
-          <body>
-            <h1>LobeHub OIDC Error</h1>
-            <p>${JSON.stringify(error, null, 2)}</p>
-            <p>${JSON.stringify(out, null, 2)}</p>
-          </body>
-        </html>
-      `;
+      logProvider('renderError: %O', error);
+
+      const params = new URLSearchParams();
+      if (out.error) params.set('error', String(out.error));
+      if (out.error_description) params.set('error_description', String(out.error_description));
+
+      ctx.redirect(`/oauth/error?${params.toString()}`);
     },
 
-    // 新增：启用 Refresh Token 轮换
+    // Added: enable refresh token rotation
     rotateRefreshToken: true,
 
-    routes: {
-      authorization: '/oidc/auth',
-      end_session: '/oidc/session/end',
-      token: '/oidc/token',
-    },
-    // 3. Scopes 定义
+    // Every route is written with the `/oidc` prefix because the provider is
+    // mounted under it and the adapter hands it the untouched pathname. A route
+    // left at its default (e.g. `/jwks`) is therefore unreachable: the request
+    // arrives as `/oidc/jwks` and the provider answers 404.
+    routes: { ...OIDC_ROUTES },
+    // 3. Scopes definition
     scopes: defaultScopes,
 
-    // 8. 令牌有效期
+    // 8. Token TTL
     ttl: {
-      AccessToken: 7 * 24 * 60 * 60, // 1 week temporarily,need to revert 1 hour with better implement
-      AuthorizationCode: 600, // 10 minutes
-      DeviceCode: 600, // 10 minutes (if enabled)
-
-      IdToken: 3600, // 1 hour
-      Interaction: 3600, // 1 hour
-
-      RefreshToken: 30 * 24 * 60 * 60, // 30 days
-      Session: 30 * 24 * 60 * 60, // 30 days
+      ...oidcArtifactTTL,
+      AccessToken: (ctx, token) => accessTokenTTL(token, oidcArtifactTTL.AccessToken),
     },
   };
 
-  // 创建提供者实例
-  const baseUrl = urlJoin(appEnv.APP_URL!, '/oidc');
+  // Create provider instance
+  const baseUrl = urlJoin(appEnv.APP_URL!, OIDC_ISSUER_PATH);
 
   const provider = new Provider(baseUrl, configuration);
   provider.proxy = true;
@@ -279,8 +367,50 @@ export const createOIDCProvider = async (db: LobeChatDatabase): Promise<Provider
     console.error('OIDC Provider Error:', err);
   });
 
+  // JWT access tokens (every token for the API audience) are self-contained and
+  // never written through the adapter, so its upsert never sees them.
+  provider.on('access_token.issued', (token) => stampClientLastUsed(db, token.clientId));
+
   provider.on('authorization.success', (ctx) => {
     logProvider('Authorization successful for client: %s', ctx.oidc.client?.clientId); // Use logProvider
+  });
+
+  /**
+   * A rejected token request is the moment a client loses its session, and until this listener
+   * existed it left no trace on the server: oidc-provider answers the client and nothing else,
+   * so the platform logs showed a bare `POST /oidc/token 400` with no client, no grant type and
+   * no reason. `error_detail` is the field worth having — it separates "grant not found" from
+   * "refresh token already used" from "client mismatch", and the spec keeps it out of the
+   * response body, so the server is the only place it can be read.
+   *
+   * Logged at warn, not error: a client presenting a dead token is its own fault, not an
+   * incident, and drowning the error feed in it would bury the failures that are ours.
+   */
+  provider.on('grant.error', (ctx, err) => {
+    const error = err as { error?: string; error_description?: string; error_detail?: string };
+
+    console.warn(
+      '[OIDC] grant rejected',
+      JSON.stringify({
+        clientId: ctx.oidc?.client?.clientId,
+        error: error.error,
+        errorDescription: error.error_description,
+        errorDetail: error.error_detail,
+        grantType: ctx.oidc?.params?.grant_type,
+        status: ctx.status,
+      }),
+    );
+  });
+
+  provider.on('grant.revoked', (ctx, grantId) => {
+    console.warn(
+      '[OIDC] grant revoked',
+      JSON.stringify({
+        clientId: ctx.oidc?.client?.clientId,
+        grantId,
+        grantType: ctx.oidc?.params?.grant_type,
+      }),
+    );
   });
 
   return provider;

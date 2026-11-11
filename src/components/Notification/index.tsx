@@ -1,47 +1,51 @@
 'use client';
 
-import { ActionIcon } from '@lobehub/ui';
-import { createStyles } from 'antd-style';
+import { type FlexboxProps } from '@lobehub/ui';
+import { ActionIcon, Flexbox } from '@lobehub/ui';
+import { cssVar } from '@lobehub/ui/stylex/cssVar.stylex';
+import * as stylex from '@stylexjs/stylex';
 import { XIcon } from 'lucide-react';
-import { rgba } from 'polished';
 import { memo } from 'react';
-import { Flexbox, FlexboxProps } from 'react-layout-kit';
 
-const useStyles = createStyles(({ css, token, isDarkMode }) => ({
-  cancelIcon: css`
-    position: absolute;
-    z-index: 100;
-    inset-block-start: 8px;
-    inset-inline-end: 8px;
-  `,
-  container: css`
-    position: absolute;
-    z-index: 1100;
-    inset-block-end: 16px;
-    inset-inline-end: 20px;
+import { useIsDark } from '@/hooks/useIsDark';
+import { sx } from '@/styles/sx';
 
-    overflow: hidden;
-
-    border: 1px solid ${token.colorSplit};
-    border-radius: 8px;
-
-    background: ${token.colorBgContainer};
-    box-shadow: ${token.boxShadowSecondary};
-  `,
-  mobileContainer: css`
-    inset-block-end: 8px;
-    inset-inline-start: 8px;
-  `,
-  wrapper: css`
-    background:
-      linear-gradient(
+const styles = stylex.create({
+  cancelIcon: {
+    position: 'absolute',
+    zIndex: 100,
+    insetBlockStart: '8px',
+    insetInlineEnd: '8px',
+  },
+  container: {
+    position: 'absolute',
+    zIndex: 1100,
+    insetBlockEnd: '16px',
+    insetInlineEnd: '20px',
+    overflow: 'hidden',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: cssVar.colorSplit,
+    borderRadius: '8px',
+    backgroundColor: cssVar.colorBgContainer,
+    backgroundImage: 'none',
+    boxShadow: cssVar.boxShadowSecondary,
+  },
+  mobileContainer: {
+    insetBlockEnd: '8px',
+    insetInlineStart: '8px',
+  },
+  wrapper: {
+    backgroundImage: `linear-gradient(
         180deg,
-        ${rgba(token.colorBgContainer, 0)},
-        ${token.colorBgContainer} ${isDarkMode ? '80' : '140'}px
+        color-mix(in srgb, ${cssVar.colorBgContainer} 0%, transparent),
+        ${cssVar.colorBgContainer} var(--gradient-stop, 140px)
       ),
-      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24'%3E%3Cg fill='${token.colorFillTertiary}' %3E %3Cpolygon fill-rule='evenodd' points='8 4 12 6 8 8 6 12 4 8 0 6 4 4 6 0 8 4'/%3E%3C/g%3E%3C/svg%3E");
-  `,
-}));
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24'%3E%3Cg fill='${cssVar.colorFillTertiary}' %3E %3Cpolygon fill-rule='evenodd' points='8 4 12 6 8 8 6 12 4 8 0 6 4 4 6 0 8 4'/%3E%3C/g%3E%3C/svg%3E")`,
+  },
+  wrapperDark: { '--gradient-stop': '80px' },
+  wrapperLight: { '--gradient-stop': '140px' },
+});
 
 interface NotificationProps extends FlexboxProps {
   height?: number | string;
@@ -66,24 +70,31 @@ const Notification = memo<NotificationProps>(
     className,
     ...rest
   }) => {
-    const { styles, cx } = useStyles();
+    const isDarkMode = useIsDark();
     const { className: wrapperClassName, ...restWrapper } = wrapper;
     return (
       show && (
         <Flexbox
-          className={cx(styles.container, mobile && styles.mobileContainer, className)}
           height={height}
           width={mobile ? 'calc(100% - 16px)' : width}
+          {...sx([styles.container, mobile && styles.mobileContainer], className)}
           {...rest}
         >
           {showCloseIcon && (
-            <ActionIcon className={styles.cancelIcon} icon={XIcon} onClick={() => onCancel?.()} />
+            <ActionIcon
+              className={stylex.props(styles.cancelIcon).className}
+              icon={XIcon}
+              onClick={() => onCancel?.()}
+            />
           )}
           <Flexbox
-            className={cx(styles.wrapper, wrapperClassName)}
-            gap={16}
             horizontal
+            gap={16}
             padding={'20px 20px 16px'}
+            {...sx(
+              [styles.wrapper, isDarkMode ? styles.wrapperDark : styles.wrapperLight],
+              wrapperClassName,
+            )}
             {...restWrapper}
           >
             {children}

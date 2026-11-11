@@ -1,5 +1,20 @@
-import { ReactNode } from 'react';
-import { Flexbox, type FlexboxProps } from 'react-layout-kit';
+import { type FlexboxProps } from '@lobehub/ui';
+import { Flexbox } from '@lobehub/ui';
+import * as stylex from '@stylexjs/stylex';
+import { type ReactNode } from 'react';
+
+import { sx } from '@/styles/sx';
+
+const DEFAULT_SCROLL_ID = 'lobe-mobile-scroll-container';
+
+const styles = stylex.create({
+  // Full-height mobile pages scroll their content pane without a visible bar.
+  // This used to be AppTheme's descendant `#lobe-mobile-scroll-container` rule.
+  hiddenScrollbar: {
+    '::-webkit-scrollbar': { height: 0, width: 0 },
+    'scrollbarWidth': 'none',
+  },
+});
 
 interface MobileContentLayoutProps extends FlexboxProps {
   header?: ReactNode;
@@ -11,13 +26,18 @@ const MobileContentLayout = ({
   withNav,
   style,
   header,
-  id = 'lobe-mobile-scroll-container',
+  className,
+  id = DEFAULT_SCROLL_ID,
   ...rest
 }: MobileContentLayoutProps) => {
   const content = (
+    // Only the shared scroll container hides its bar; a caller that renames the
+    // element opts out, exactly as the id-scoped CSS rule did.
     <Flexbox
+      className={sx(id === DEFAULT_SCROLL_ID && styles.hiddenScrollbar, className).className}
       height="100%"
       id={id}
+      width="100%"
       style={{
         overflowX: 'hidden',
         overflowY: 'auto',
@@ -26,7 +46,6 @@ const MobileContentLayout = ({
         // TabNav Height
         paddingBottom: withNav ? 48 : style?.paddingBottom,
       }}
-      width="100%"
       {...rest}
     >
       {children}
@@ -39,8 +58,10 @@ const MobileContentLayout = ({
     <Flexbox height={'100%'} style={{ overflow: 'hidden', position: 'relative' }} width={'100%'}>
       {header}
       <Flexbox
+        className={sx(styles.hiddenScrollbar, className).className}
         height="100%"
-        id={'lobe-mobile-scroll-container'}
+        id={DEFAULT_SCROLL_ID}
+        width="100%"
         style={{
           overflowX: 'hidden',
           overflowY: 'auto',
@@ -49,7 +70,6 @@ const MobileContentLayout = ({
           // TabNav Height
           paddingBottom: withNav ? 48 : style?.paddingBottom,
         }}
-        width="100%"
         {...rest}
       >
         {children}
@@ -57,7 +77,5 @@ const MobileContentLayout = ({
     </Flexbox>
   );
 };
-
-MobileContentLayout.displayName = 'MobileContentLayout';
 
 export default MobileContentLayout;

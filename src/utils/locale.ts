@@ -1,23 +1,19 @@
 import { resolveAcceptLanguage } from 'resolve-accept-language';
 
 import { DEFAULT_LANG } from '@/const/locale';
-import { Locales, locales, normalizeLocale } from '@/locales/resources';
-import { RouteVariants } from '@/utils/server/routeVariants';
+import { type Locales } from '@/locales/resources';
+import { locales, normalizeLocale } from '@/locales/resources';
 
-export const getAntdLocale = async (lang?: string) => {
-  let normalLang = normalizeLocale(lang);
+import { RouteVariants } from './server/routeVariants';
 
-  // due to antd only have ar-EG locale, we need to convert ar to ar-EG
-  // refs: https://ant.design/docs/react/i18n
+const normalizeAcceptLanguageHeader = (acceptLanguage: string) =>
+  acceptLanguage
+    .replaceAll(/zh-Hans(?:-[a-z]{2})?/gi, 'zh-CN')
+    .replaceAll(/zh-Hant(?:-[a-z]{2})?/gi, 'zh-TW');
 
-  // And we don't want to handle it in `normalizeLocale` function
-  // because of other locale files are all `ar` not `ar-EG`
-  if (normalLang === 'ar') normalLang = 'ar-EG';
-
-  const { default: locale } = await import(`antd/locale/${normalLang.replace('-', '_')}.js`);
-
-  return locale;
-};
+const supportedAcceptLanguageLocales = locales.map((locale) =>
+  locale === 'ar' ? 'ar-EG' : locale,
+);
 
 /**
  * Parse the browser language and return the fallback language
@@ -34,21 +30,21 @@ export const parseBrowserLanguage = (headers: Headers, defaultLang: string = DEF
    * 3) The default locale.
    */
   let browserLang: string = resolveAcceptLanguage(
-    headers.get('accept-language') || '',
+    normalizeAcceptLanguageHeader(headers.get('accept-language') || ''),
     //  Invalid locale identifier 'ar'. A valid locale should follow the BCP 47 'language-country' format.
-    locales.map((locale) => (locale === 'ar' ? 'ar-EG' : locale)),
+    supportedAcceptLanguageLocales,
     defaultLang,
   );
 
   // if match the ar-EG then fallback to ar
   if (browserLang === 'ar-EG') browserLang = 'ar';
 
-  return browserLang;
+  return normalizeLocale(browserLang);
 };
 
 /**
- * Parse the page locale from the URL and search params
- * @param props
+ * Parse the page locale from the URL and search
+ * used in cloud
  */
 export const parsePageLocale = async (props: {
   params: Promise<{ variants: string }>;

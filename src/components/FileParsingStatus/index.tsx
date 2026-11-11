@@ -1,27 +1,25 @@
-import { Button, Icon, Tag, Tooltip } from '@lobehub/ui';
-import { Badge } from 'antd';
-import { createStyles } from 'antd-style';
-import { BoltIcon, Loader2Icon, RotateCwIcon } from 'lucide-react';
-import { darken, lighten } from 'polished';
+import { Badge, Button, cx, Flexbox, Icon, Spin, Tag, Tooltip } from '@lobehub/ui';
+import { cssVar } from '@lobehub/ui/stylex/cssVar.stylex';
+import * as stylex from '@stylexjs/stylex';
+import { BoltIcon, RotateCwIcon } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Flexbox } from 'react-layout-kit';
 
-import { AsyncTaskStatus, FileParsingTask } from '@/types/asyncTask';
+import { type FileParsingTask } from '@/types/asyncTask';
+import { AsyncTaskStatus } from '@/types/asyncTask';
 
 import EmbeddingStatus from './EmbeddingStatus';
 
-const useStyles = createStyles(({ css, token, isDarkMode }) => ({
-  errorReason: css`
-    padding: 4px;
-    border-radius: 4px;
-
-    font-family: monospace;
-    font-size: 12px;
-
-    background: ${isDarkMode ? darken(0.1, token.colorText) : lighten(0.1, token.colorText)};
-  `,
-}));
+const styles = stylex.create({
+  errorReason: {
+    padding: '4px',
+    borderRadius: '4px',
+    fontFamily: 'monospace',
+    fontSize: '12px',
+    backgroundColor: cssVar.colorFillTertiary,
+    backgroundImage: 'none',
+  },
+});
 
 interface FileParsingStatusProps extends FileParsingTask {
   className?: string;
@@ -48,7 +46,6 @@ const FileParsingStatus = memo<FileParsingStatusProps>(
     hideEmbeddingButton,
   }) => {
     const { t } = useTranslation(['components', 'common']);
-    const { styles, cx } = useStyles();
 
     switch (chunkingStatus) {
       case AsyncTaskStatus.Processing: {
@@ -72,7 +69,7 @@ const FileParsingStatus = memo<FileParsingStatusProps>(
               <Flexbox gap={4}>
                 {t('FileParsingStatus.chunks.status.errorResult')}
                 {chunkingError && (
-                  <Flexbox className={styles.errorReason}>
+                  <Flexbox className={stylex.props(styles.errorReason).className}>
                     [{chunkingError.name}]:{' '}
                     {chunkingError.body && typeof chunkingError.body !== 'string'
                       ? chunkingError.body.detail
@@ -82,15 +79,15 @@ const FileParsingStatus = memo<FileParsingStatusProps>(
               </Flexbox>
             }
           >
-            <Tag bordered={false} className={className} color={'error'}>
+            <Tag className={className} color={'error'} variant={'filled'}>
               {t('FileParsingStatus.chunks.status.error')}{' '}
               <Icon
                 icon={RotateCwIcon}
+                style={{ cursor: 'pointer' }}
+                title={t('retry', { ns: 'common' })}
                 onClick={() => {
                   onErrorClick?.('chunking');
                 }}
-                style={{ cursor: 'pointer' }}
-                title={t('retry', { ns: 'common' })}
               />
             </Tag>
           </Tooltip>
@@ -107,15 +104,13 @@ const FileParsingStatus = memo<FileParsingStatusProps>(
                 title={t('FileParsingStatus.chunks.embeddingStatus.empty')}
               >
                 <Tag
-                  bordered={false}
                   className={cx('chunk-tag', className)}
-                  icon={
-                    preparingEmbedding ? <Icon icon={Loader2Icon} spin /> : <Icon icon={BoltIcon} />
-                  }
+                  icon={preparingEmbedding ? <Spin size="small" /> : <Icon icon={BoltIcon} />}
+                  style={{ cursor: 'pointer' }}
+                  variant={'filled'}
                   onClick={() => {
                     onClick?.(AsyncTaskStatus.Success);
                   }}
-                  style={{ cursor: 'pointer' }}
                 >
                   {chunkCount}
                   {
@@ -124,17 +119,17 @@ const FileParsingStatus = memo<FileParsingStatusProps>(
                     // or if preparing the embedding
                     preparingEmbedding ? null : (
                       <Button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onEmbeddingClick?.();
-                        }}
+                        type={'link'}
                         style={{
                           fontSize: 12,
                           height: 'auto',
                           paddingBlock: 0,
                           paddingInline: '8px 0',
                         }}
-                        type={'link'}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onEmbeddingClick?.();
+                        }}
                       >
                         {t('FileParsingStatus.chunks.embeddings')}
                       </Button>

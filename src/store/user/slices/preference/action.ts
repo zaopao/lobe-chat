@@ -1,35 +1,56 @@
-import type { StateCreator } from 'zustand/vanilla';
-
 import { userService } from '@/services/user';
-import type { UserStore } from '@/store/user';
-import { UserGuide, UserPreference } from '@/types/user';
+import { type StoreSetter } from '@/store/types';
+import { type UserStore } from '@/store/user';
+import { type UserGuide, type UserLab, type UserPreference } from '@/types/user';
 import { merge } from '@/utils/merge';
 import { setNamespace } from '@/utils/storeDebug';
 
+import { writeUserDisplaySnapshot } from '../../displaySnapshot';
+
 const n = setNamespace('preference');
 
-export interface PreferenceAction {
-  updateGuideState: (guide: Partial<UserGuide>) => Promise<void>;
-  updatePreference: (preference: Partial<UserPreference>, action?: any) => Promise<void>;
-}
+type Setter = StoreSetter<UserStore>;
+export const createPreferenceSlice = (set: Setter, get: () => UserStore, _api?: unknown) =>
+  new PreferenceActionImpl(set, get, _api);
 
-export const createPreferenceSlice: StateCreator<
-  UserStore,
-  [['zustand/devtools', never]],
-  [],
-  PreferenceAction
-> = (set, get) => ({
-  updateGuideState: async (guide) => {
-    const { updatePreference } = get();
-    const nextGuide = merge(get().preference.guide, guide);
-    await updatePreference({ guide: nextGuide });
-  },
+export class PreferenceActionImpl {
+  readonly #get: () => UserStore;
+  readonly #set: Setter;
 
-  updatePreference: async (preference, action) => {
-    const nextPreference = merge(get().preference, preference);
+  constructor(set: Setter, get: () => UserStore, _api?: unknown) {
+    void _api;
+    this.#set = set;
+    this.#get = get;
+  }
 
-    set({ preference: nextPreference }, false, action || n('updatePreference'));
+  updateGuideState = async (guide: Partial<UserGuide>, action?: any): Promise<void> => {
+    const { updatePreference } = this.#get();
+    const nextGuide = merge(this.#get().preference.guide, guide);
+    await updatePreference({ guide: nextGuide }, action);
+  };
+
+  updateLab = async (lab: Partial<UserLab>, action?: any): Promise<void> => {
+    const { updatePreference } = this.#get();
+    // Older clients still read the pre-rename `enableTopicAcceptance` key, so keep
+    // it in step with `enableGoals` until they age out.
+    const patch =
+      lab.enableGoals === undefined ? lab : { ...lab, enableTopicAcceptance: lab.enableGoals };
+    const nextLab = merge(this.#get().preference.lab, patch);
+    await updatePreference({ lab: nextLab }, action || n('updateLab'));
+  };
+
+  updatePreference = async (preference: Partial<UserPreference>, action?: any): Promise<void> => {
+    const nextPreference = merge(this.#get().preference, preference);
+    const userId = this.#get().user?.id;
+
+    this.#set({ preference: nextPreference }, false, action || n('updatePreference'));
 
     await userService.updatePreference(nextPreference);
-  },
-});
+
+    writeUserDisplaySnapshot(userId, {
+      preference: nextPreference,
+    });
+  };
+}
+
+export type PreferenceAction = Pick<PreferenceActionImpl, keyof PreferenceActionImpl>;
