@@ -1,5 +1,5 @@
 {
-  "buildCommand": "bun run build:vercel",
+  "buildCommand": "node -e \"process.exit(1)\"",
   "headers": [
     {
       "source": "/_spa/(.*)",
@@ -50,7 +50,7 @@
     }
   ],
   "ignoreCommand": "node scripts/vercelIgnoredBuildStep.js",
-  "installCommand": "npx pnpm@12.4.1 install",
+  "installCommand": "node --version",
   "rewrites": [
     {
       "source": "/_dangerous_local_dev_proxy",
@@ -60,5 +60,10 @@
       "source": "/_dangerous_local_dev_proxy/:path*",
       "destination": "/_dangerous_local_dev_proxy.html"
     }
-  ]
+  ],
+  "git": {
+    "deploymentEnabled": {
+      "lobehub-v2.3.2-neon-preview": false
+    }
+  }
 }
